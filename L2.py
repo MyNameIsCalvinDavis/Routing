@@ -7,6 +7,13 @@ random.seed(123)
 
 MAC_BROADCAST="FFFF"
 
+# Debug 0 : Show nothing
+# Debug 1 : Show who talks to who
+# Debug 2 : Show who sends what to who
+DEBUG=0
+
+
+
 subnet = []
 
 def initLinks(links):
@@ -68,12 +75,11 @@ class Device(ABC):
         # Basically:
         # Get the device at the other end of onlink,
         # and append data to its data buffer
-        end = self.getOtherInterface(onlink)
+        end = self.getOtherDeviceOnInterface(onlink)
         p = makePacket(data["Name"], data["From"], data["To"], onlink.id, data["Data"])
-
-        s = self.id + " ==> "+ self.getOtherInterface(onlink).id + " via "+ p["FromLink"] + "\n"
-        s += "    " + str(data)
-        print(s)
+        
+        if DEBUG == 1: print(self.id + " ==> "+ self.getOtherDeviceOnInterface(onlink).id + " via "+ p["FromLink"])
+        if DEBUG == 2: print(self.id + " ==> "+ self.getOtherDeviceOnInterface(onlink).id + " via "+ p["FromLink"] + "\n    " + str(data))
 
         self.lock.acquire()
         end.buffer.append(p)
@@ -84,8 +90,13 @@ class Device(ABC):
             time.sleep(0.5)
             if self.buffer:
                 data = self.buffer.pop(0)
-                s = self.id + " got data from " + self.getOtherInterface(self.getLinkFromID(data["FromLink"])).id + "\n" + "    " + str(data)
-                print(s)
+
+                if DEBUG == 1:
+                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(self.getLinkFromID(data["FromLink"])).id)
+                if DEBUG == 2:
+                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(self.getLinkFromID(data["FromLink"])).id \
+                        + "\n    " + str(data))
+                    
                 if data["Name"] == "ARP":
                     self.handleARP(data)
                 elif data["Name"] == "DHCP":
@@ -97,7 +108,7 @@ class Device(ABC):
     def handleARP(self):
         raise NotImplementedError("Must override this method in the child class")
 
-    def getOtherInterface(self, onlink):
+    def getOtherDeviceOnInterface(self, onlink):
         # Find the other device on a link
         if onlink.dl[0].id == self.id:
             return onlink.dl[1]
@@ -121,18 +132,20 @@ class Host(Device):
         # self.send() will exclude the onlink parameter
 
     def handleARP(self, data):
+        # Update local ARP cache, regardless of match
+        self.mti[data["From"]] = data["FromLink"]
+
         # Receiving an ARP Request
         if data["To"] == MAC_BROADCAST and data["Data"]["ID"] == self.id:
-            print(self.id, "got ARP-Rq, sending ARP-Rp")
+            if DEBUG: print(self.id, "got ARP-Rq, sending ARP-Rp")
             p = makePacket("ARP", self.id, data["From"])
             self.send(p)
         
         # Receiving an ARP Response
         elif data["To"] == self.id:
-            print("To me!", self.id, "updating ARP table")
-            self.mti[data["From"]] = data["FromLink"]
+            if DEBUG: print("To me!", self.id, "updating ARP table")
         else:
-            print(self.id, "ignoring", data["From"])#, data)
+            if DEBUG: print(self.id, "ignoring", data["From"])#, data)
 
 class Switch(Device):
     def __init__(self):
@@ -148,20 +161,20 @@ class Switch(Device):
         # Before evaluating, add incoming data to ARP table
         self.mti[data["From"]] = data["FromLink"]
         self.itm[data["FromLink"]] = data["From"]
-        print("Updated ARP table:", self.mti)
+        if DEBUG == 1: print(self.id, "Updated ARP table:", self.mti)
 
         # ARP table lookup
         if data["To"] in self.mti:
-            print("Found in ARP table")
+            if DEBUG: print(self.id, "Found", data["To"], "in ARP table")
             # Grab the link ID associated with the TO field (in the ARP table),
             # then get the link object from that ID
             link = self.getLinkFromID( self.mti[ data["To"] ])
             self.send(data, link)
 
         else: # Flood every interface with the request
-            print(self.id, "flooding")
+            if DEBUG: print(self.id, "flooding")
             for link in self.interfaces:
-                end = self.getOtherInterface(link)
+                end = self.getOtherDeviceOnInterface(link)
                 if end.id != data["From"]: # Dont send to self, or back to sender
                     self.send(data, link)
                             
@@ -170,6 +183,8 @@ class Link:
     def __init__(self, dl=[]):
         self.id = "[L]" + str(random.randint(10000, 99999999))
         self.dl = dl
+
+DEBUG = 1
 
 A = Host()
 B = Host()
@@ -187,10 +202,7 @@ initLinks([L1, L2, L3])
 print(A, B, C)
 print(S1)
 
-
 print("Host A", A.id, "sending to host B", B.id)
 
-p = makePacket("ARP", A.id, MAC_BROADCAST, data={"ID":B.id})
+p = makePacket(name="ARP", fr=A.id, to=MAC_BROADCAST, data={"ID":B.id})
 A.send(p)
-
-
