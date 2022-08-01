@@ -8,21 +8,17 @@ random.seed(123)
 
 MAC_BROADCAST="FFFF"
 
-# Debug 0 : Show nothing
-# Debug 1 : Show who talks to who
-# Debug 2 : Show who sends what to who
-DEBUG=0
 
 
 
 subnet = []
 
-def initLinks(links):
-    # Ensure devices on links internalize their link association
-    for link in links:
-        for device in link.dl:
-            if link not in device.interfaces:
-                device.interfaces.append(link)
+#def initLinks(links):
+#    # Ensure devices on links internalize their link association
+#    for link in links:
+#        for device in link.dl:
+#            if link not in device.interfaces:
+#                device.interfaces.append(link)
 
 def makePacket(L2="", L3="", L4="", L5="", L6="", L7=""):
     
@@ -60,7 +56,13 @@ def makePacket_L3(sip="", dip="", data=""):
 
 # Abstract Base Class
 class Device(ABC):
-    def __init__(self):
+
+    # Debug 0 : Show nothing
+    # Debug 1 : Show who talks to who
+    # Debug 2 : Show who sends what to who
+    DEBUG=1
+
+    def __init__(self, connectedTo=[]):
         self.id = "___" + str(random.randint(10000, 99999999))
         self.interfaces = []
         self.buffer = []
@@ -70,6 +72,20 @@ class Device(ABC):
         # Start the listening thread on this device
         x = threading.Thread(target=self.listen, args=())
         x.start()
+
+
+        self._initConnections(connectedTo)
+
+    def _initConnections(self, connectedTo):
+        """
+        Create a link between me and every device in connectedTo, and vice versa.
+        """
+        for device in connectedTo:
+            link = Link([self, device])
+            if not link in self.interfaces:
+                self.interfaces.append(link)
+            if not link in device.interfaces:
+                device.interfaces.append(link)
 
     def __str__(self):
         s = "\n" + self.id + "\n"
@@ -120,8 +136,8 @@ class Device(ABC):
         data["L2"]["FromLink"] = onlink # It was you!
 
         end = self.getOtherDeviceOnInterface(onlink)
-        if DEBUG == 1: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"])
-        if DEBUG == 2: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"] + "\n    " + str(data))
+        if Device.DEBUG == 1: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"])
+        if Device.DEBUG == 2: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"] + "\n    " + str(data))
 
         self.lock.acquire()
         end.buffer.append(data)
@@ -134,9 +150,9 @@ class Device(ABC):
             if self.buffer:
                 data = self.buffer.pop(0)
 
-                if DEBUG == 1:
+                if Device.DEBUG == 1:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
-                if DEBUG == 2:
+                if Device.DEBUG == 2:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
                     
                 if data["L2"]["EtherType"] == "ARP":
@@ -158,10 +174,6 @@ class Device(ABC):
         p = makePacket(p2)
         self.send(p, onlinkID)
 
-    # @abstractmethod
-    # def handleARP(self):
-    #     raise NotImplementedError("Must override this method in the child class")
-    
     # Most devices handle ARPs the same way
     def handleARP(self, data):
         # Update local ARP cache, regardless of match
@@ -169,16 +181,16 @@ class Device(ABC):
 
         # Receiving an ARP Request
         if data["L2"]["To"] == MAC_BROADCAST and data["L2"]["Data"]["ID"] == self.id:
-            if DEBUG: print(self.id, "got ARP-Rq, sending ARP-Rp")
+            if Device.DEBUG: print(self.id, "got ARP-Rq, sending ARP-Rp")
             p2 = makePacket_L2("ARP", self.id, data["L2"]["From"]) # Resp has no data
             p = makePacket(p2)
             self.send(p)
         
         # Receiving an ARP Response
         elif data["L2"]["To"] == self.id:
-            if DEBUG: print("To me!", self.id, "updating ARP table")
+            if Device.DEBUG: print("To me!", self.id, "updating ARP table")
         else:
-            if DEBUG: print(self.id, "ignoring", data["L2"]["From"])#, data)
+            if Device.DEBUG: print(self.id, "ignoring", data["L2"]["From"])#, data)
 
     @abstractmethod
     def handleDHCP(self):
@@ -211,8 +223,8 @@ class Device(ABC):
                 return link
             
 class Host(Device):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, connectedTo=[]):
+        super().__init__(connectedTo)
         self.id = "-H-" + str(random.randint(10000, 99999999))
         self.ip = ""
 
@@ -236,8 +248,8 @@ class Host(Device):
 
 
 class Switch(Device):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, connectedTo=[]):
+        super().__init__(connectedTo)
         self.id = "{S}" + str(random.randint(10000, 99999999))
         self.itm = {}
 
@@ -251,11 +263,11 @@ class Switch(Device):
         # Before evaluating, add incoming data to ARP table
         self.mti[data["L2"]["From"]] = data["L2"]["FromLink"]
         self.itm[data["L2"]["FromLink"]] = data["L2"]["From"]
-        if DEBUG == 1: print(self.id, "Updated ARP table:", self.mti)
+        if Device.DEBUG == 1: print(self.id, "Updated ARP table:", self.mti)
         
         # ARP table lookup
         if data["L2"]["To"] in self.mti:
-            if DEBUG: print(self.id, "Found", data["L2"]["To"], "in ARP table")
+            if Device.DEBUG: print(self.id, "Found", data["L2"]["To"], "in ARP table")
             # Grab the link ID associated with the TO field (in the ARP table),
             # then get the link object from that ID
             #link = self.getLinkFromID( self.mti[ data["To"] ])
@@ -263,10 +275,9 @@ class Switch(Device):
             self.send(data, self.mti[ data["L2"]["To"] ])
 
         else: # Flood every interface with the request
-            if DEBUG: print(self.id, "flooding")
+            if Device.DEBUG: print(self.id, "flooding")
             for link in self.interfaces:
-                end = self.getOtherDeviceOnInterface(link.id)
-                if end.id != data["L2"]["From"]: # Dont send to self, or back to sender
+                if link.id != data["L2"]["FromLink"]: # Dont send back on the same link
                     # Python shenanigans: Make sure to flood with a *copy*
                     # and not a reference to the same data dictionary
                     # This is now handled in send()
@@ -274,8 +285,8 @@ class Switch(Device):
 
 # Also a DHCP server
 class Router(Device):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, connectedTo=[]):
+        super().__init__(connectedTo)
         self.id = "=R=" + str(random.randint(10000, 99999999))
 
         # DHCP Server
@@ -286,8 +297,8 @@ class Router(Device):
     def handleDHCP(self, data):
         # Receiving a client discover
         if data["L3"]["SIP"] == "0.0.0.0" and data["L3"]["DIP"] == "255.255.255.255":
-            if DEBUG: print("Router got a DHCP Discover request")
-            if DEBUG == 2: print(data)
+            if Device.DEBUG: print("Router got a DHCP Discover request")
+            if Device.DEBUG == 2: print(data)
             # Send DHCP offer request
             clientip = self.generateIP()
             p3 = makePacket_L3(self.ip, "255.255.255.255", {
@@ -300,15 +311,15 @@ class Router(Device):
             
             p = makePacket(p2, p3)
 
-            if DEBUG: print("Router DHCP sending on", data["L2"]["FromLink"])
-            if DEBUG == 2: print(p)
+            if Device.DEBUG: print("Router DHCP sending on", data["L2"]["FromLink"])
+            if Device.DEBUG == 2: print(p)
             self.send(p, data["L2"]["FromLink"])
         else:
-            if DEBUG: print(self.id, "Ignoring")
+            if Device.DEBUG: print(self.id, "Ignoring")
     def generateIP(self):
         while True:
             x = "10.10.10." + str(random.randint(2, 254))
-            if DEBUG: print(self.id, "Finding an IP:", x, "for client (DHCP)")
+            if Device.DEBUG: print(self.id, "Finding an IP:", x, "for client (DHCP)")
             if not x in self.leased_ips:
                 self.leased_ips.append(x)
                 return x
@@ -322,22 +333,12 @@ class Link:
 
 if __name__ == "__main__":
 
-    DEBUG = 1
-        
     A, B, C = Host(), Host(), Host()
     R1 = Router()
-    S1 = Switch()
-    
-    L1 = Link([A, S1])
-    L2 = Link([B, S1])
-    L3 = Link([C, S1])
-    L4 = Link([R1, S1])
-    
-    initLinks([L1, L2, L3, L4])
+    S1 = Switch([A, B, C, R1])
     
     print(A, B, C, R1)
     print(S1)
 
-    A.sendDHCP("Init")
-    
-    #A.sendARP(B.id)
+    #A.sendDHCP("Init")
+    A.sendARP(B.id)
