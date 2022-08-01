@@ -15,25 +15,20 @@ We can initialize it as such:
 
 ```python
 A, B, C = Host(), Host(), Host()
-S1 = Switch()
-
-L1 = Link([A, S1])
-L2 = Link([B, S1])
-L3 = Link([C, S1])
-
-initLinks([L1, L2, L3])
+S1 = Switch([A, B, C])
 ```
 
-Packets / Frames sent don't (yet) follow an RFC, they are just a dictionary. In our example, host A sends an ARP request looking for host B:
+Devices can then speak to each other as expected, via a dict representation of packed frames . In our example, host A sends an ARP request looking for host B. We must pack the frame ourselves, though some of the data can be inferred, and of course you can wrap this functionality:
 ```python
->>> p = makePacket(name="ARP", fr=A.id, to=MAC_BROADCAST, data=data={"ID":B.id})
+>>> # The provided Device.sendARP() method abstracts this process
+>>> p = makePacket_L2(name="ARP", fr=A.id, to=MAC_BROADCAST, data=data={"ID":B.id})
 >>> p
 {
-  "Name":"ARP",
-  "From":<A MAC HERE>,
+  "EtherType":"ARP",
+  "From":<A MAC>,
   "To":<MAC BROADCAST ADDR>,
   "FromLink":<LINK ID> # Used identify which interface a frame comes from, in lieu of an actual hardware port
-  "Data": {"ID": <B MAC HERE>}
+  "Data": {"ID": <B MAC>}
 }
 ```
 
@@ -43,12 +38,10 @@ When we send() data, we don't send TO a host, rather we output on an interface. 
 >>> A.send(p) # onlink param default value is self.interfaces[0]. Fine for a host with only one interface
 ```
 
-Alternatively, we can send on a specific device interface if we desire if we're sending from a switch or other multi-interface Device:
+We can also specify a specific interface, good for devices with several interfaces, like a Router or Switch:
 
 ```python
->>> A.send(p, L1)               # Call it by name directly
->>> A.send(p, A.interfaces[0])  # Or pass it in from the instance
->>> A.send(p, L2)               # Naturally, L2 is not connected to A, so this is undefined behavior
+>>> A.send(p, A.interfaces[0])
 ```
 
 We can see the updated ARP caches of several of the devices, in the form of:
