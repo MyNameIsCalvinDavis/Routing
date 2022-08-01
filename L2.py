@@ -76,6 +76,7 @@ class Device(ABC):
 
         self._initConnections(connectedTo)
 
+
     def _initConnections(self, connectedTo):
         """
         Create a link between me and every device in connectedTo, and vice versa.
@@ -147,6 +148,7 @@ class Device(ABC):
     def listen(self):
         while True:
             time.sleep(0.5)
+            self._checkTimeouts()
             if self.buffer:
                 data = self.buffer.pop(0)
 
@@ -192,9 +194,6 @@ class Device(ABC):
         else:
             if Device.DEBUG: print(self.id, "ignoring", data["L2"]["From"])#, data)
 
-    @abstractmethod
-    def handleDHCP(self):
-        raise NotImplementedError("Must override this method in the child class")
 
     def getOtherDeviceOnInterface(self, onlinkID):
         if not isinstance(onlinkID, str): raise ValueError("onlinkID must be of type <str>")
@@ -208,7 +207,6 @@ class Device(ABC):
     def getLinkFromID(self, ID):
         # Given an ID of a link attached to this device,
         # return the object
-        
 
         if not isinstance(ID, str): raise ValueError("ID must be of type <str>")
 
@@ -217,28 +215,114 @@ class Device(ABC):
         if not ID in ids:
             raise ValueError("LinkID " + ID + " not located in " + self.id + " interfaces")
 
-
         for link in self.interfaces:
             if link.id == ID:
                 return link
+
+    # Routers & Hosts need this but Switches do not, so instead of 
+    # doing the right (?) thing and overriding listen() in the child
+    # classes, I'm just doing this because it ends up being less duplicated code.
+    # The alternative is each subclass that uses timeouts will implement both their
+    # own version of listen, and their own version of this method, which will
+    # get messy. I could also break up the class hierarchy, but that would
+    # make the inheritence unintuitive - instead, all devices must implement
+    # this function, even if they do nothing with it.
+    @abstractmethod   
+    def _checkTimeouts(self):
+        raise NotImplementedError("Must override this method in the child class")
+        
+    @abstractmethod
+    def handleDHCP(self):
+        raise NotImplementedError("Must override this method in the child class")
             
 class Host(Device):
     def __init__(self, connectedTo=[]):
         super().__init__(connectedTo)
+        # L2
         self.id = "-H-" + str(random.randint(10000, 99999999))
-        self.ip = ""
 
+        # L3
+        self.ip = ""
+        self.offered_ip = ""
+        self.nmask = ""
+        self.gateway = ""
+        self.lease = (-1, -1) # (leaseTime, time (s) received the lease)
+        self.lease_left = -1
+        self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP --- 3: Renewal
+        self.DHCP_MAC = ""
+        self.DHCP_IP = ""
+        
         # On init, begin the DHCP DORA cycle to obtain an IP
         #self.sendDHCP("Init")
     
-    def handleDHCP(self, data):
-        pass
+    def _checkTimeouts(self):
+        # DHCP
+        if self.lease[0] >= 0:
+            self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
+            if self.lease_left <= 0.5 * self.lease[0]:
+                self.DHCP_FLAG = 1
 
-    def sendDHCP(self, context, onlink=None):
+    def handleDHCP(self, data): # R of DORA
+
+        print(self.id, "got DHCP: ", data)
+        if data["L2"]["To"] == self.id and "CIP" in data["L3"]["Data"]:
+            
+            # Receive DHCP Offer
+            print(self.id, "flag=", self.DHCP_FLAG)
+            if self.DHCP_FLAG == 0: # Process Offer
+
+                print("--", self.id, "received DHCP Offer, sending Request (broadcast)")
+                self.DHCP_FLAG = 1
+                self.offered_ip = data["L3"]["Data"]["CIP"]
+                
+                # DHCP server could be independent of SIP
+                # if on different networks, so we grab from
+                # DHCP_IP, not SIP
+                self.DHCP_IP = data["L3"]["Data"]["DHCP_IP"]
+                self.DHCP_MAC = data["L2"]["From"]
+                
+                # Send DHCP Request
+                # Broadcast, not unicast. See RFC 2131 S 3.1.4
+                p2 = makePacket_L2("DHCP", self.id, MAC_BROADCAST)
+                p3 = makePacket_L3("0.0.0.0", "255.255.255.255", {
+                    "CID":self.id,
+                    "CIP":self.offered_ip,
+                    "DHCP_IP":data["L3"]["Data"]["DHCP_IP"] # Just pick the first DHCP server that offers
+                })
+                p = makePacket(p2, p3)
+                self.send(p)
+            elif self.DHCP_FLAG == 1: # Process ACK
+                print(self.id, "received DHCP ACK")
+                self.ip = data["L3"]["Data"]["CIP"]
+                self.nmask = data["L3"]["Data"]["NMASK"]
+                self.gateway = data["L3"]["Data"]["Gateway"]
+                self.lease = (data["L3"]["Data"]["Lease"], int(time.time()))
+                self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
+                self.DHCP_FLAG = 2
+            elif self.DHCP_FLAG == 3: # Renewal
+                self.DHCP_FLAG = 1
+                
+                # Changed from Request: From, SIP, DIP, CIP
+                p2 = makePacket_L2("DHCP", self.id, self.DHCP_MAC)
+                p3 = makePacket_L3(self.ip, self.DHCP_IP, {
+                    "CID":self.id,
+                    "CIP":self.offered_ip,
+                    #"DHCP_IP":data["L3"]["DHCP_IP"] # Just pick the first DHCP server that offers
+                })
+                p = makePacket(p2, p3)
+                self.send(p)
+            else:
+                print(self.id, "already assigned IP:", self.ip)
+        else:
+            print(self.id, "ignoring DHCP", data["L2"]["From"])
+        
+
+    def sendDHCP(self, context, onlink=None): # D of DORA
         if context == "Init": # Start DORA cycle
             if onlink == None:
                 onlink = self.interfaces[0]
-
+            
+            print("--", self.id, "sending DHCP Discover")
             # It has layers, like an ogre, or a cake
             # DHCP data is currently in the data field for L3, not sure if that should be L2 instead
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", {"CID":self.id}) # MAC included
@@ -252,6 +336,9 @@ class Switch(Device):
         super().__init__(connectedTo)
         self.id = "{S}" + str(random.randint(10000, 99999999))
         self.itm = {}
+    
+    def _checkTimeouts(self):
+        pass
 
     def handleARP(self, data):
         self.handleAll(data)
@@ -291,29 +378,73 @@ class Router(Device):
 
         # DHCP Server
         self.ip = "10.10.10.1"
-        self.mask = "255.255.255.0"
+        self.nmask = "255.255.255.0"
         self.leased_ips = []
+    
+    def _checkTimeouts(self):
+        pass
 
-    def handleDHCP(self, data):
-        # Receiving a client discover
+    def handleDHCP(self, data): # O of DORA
+        # Receive client Discover
         if data["L3"]["SIP"] == "0.0.0.0" and data["L3"]["DIP"] == "255.255.255.255":
-            if Device.DEBUG: print("Router got a DHCP Discover request")
-            if Device.DEBUG == 2: print(data)
-            # Send DHCP offer request
-            clientip = self.generateIP()
-            p3 = makePacket_L3(self.ip, "255.255.255.255", {
-                "CIP":clientip, "CID":data["L3"]["Data"]["CID"], "SMASK":self.mask, "Gateway":self.ip,
-                "Lease":60
-                })
-            # We assume that a host can accept a DHCP unicast packet at this point,
-            # so do not issue another broadcast
-            p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
-            
-            p = makePacket(p2, p3)
+            if not "CIP" in data["L3"]["Data"]: # O
+                if Device.DEBUG: print("--Router got a DHCP Discover request, sending Offer")
+                if Device.DEBUG == 2: print(data)
 
-            if Device.DEBUG: print("Router DHCP sending on", data["L2"]["FromLink"])
-            if Device.DEBUG == 2: print(p)
-            self.send(p, data["L2"]["FromLink"])
+                # Send DHCP Offer
+                clientip = self.generateIP()
+                p3 = makePacket_L3(self.ip, "255.255.255.255", {
+                    "CIP":clientip,
+                    "CID":data["L3"]["Data"]["CID"], 
+                    "NMASK":self.nmask, 
+                    "Gateway":self.ip,
+                    "Lease":60, 
+                    "DHCP_IP":self.ip
+                    })
+                p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
+                # We assume that a host can accept a DHCP unicast packet at this point,
+                # so do not issue another broadcast
+                p = makePacket(p2, p3)
+
+                if Device.DEBUG: print("Router DHCP sending on", data["L2"]["FromLink"])
+                if Device.DEBUG == 2: print(p)
+                self.send(p, data["L2"]["FromLink"])
+
+            # Receive client Request, send DHCP Ack
+            elif "CIP" in data["L3"]["Data"]: # A
+                print("--", self.id, "received DHCP Request, sending Ack")
+                # Seems to be identical to the Offer
+                p3 = makePacket_L3(self.ip, "255.255.255.255", {
+                    "CIP":data["L3"]["Data"]["CIP"], # TODO: Make dictionary association for Host : IP
+                    "CID":data["L3"]["Data"]["CID"], 
+                    "NMASK":self.nmask, 
+                    "Gateway":self.ip,
+                    "Lease":60, 
+                    "DHCP_IP":self.ip
+                    })
+                p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
+                p = makePacket(p2, p3)
+                
+                self.leased_ips.append(data["L3"]["Data"]["CIP"]) # TODO: Make this a map, not a list
+                self.send(p, data["L2"]["FromLink"])
+
+                # TODO: Enable Lease de-activation
+                # Basically, disallow L3 communication (outside of the router)
+
+        # Probably a renewal, if it's directly to me and not a fake SIP
+        elif data["L3"]["DIP"] == self.ip and data["L3"]["SIP"] != "0.0.0.0":
+            
+            p3 = makePacket_L3(self.ip, data["L3"]["SIP"], {
+                "CIP":data["L3"]["Data"]["CIP"],
+                "CID":data["L3"]["Data"]["CID"], 
+                "NMASK":self.nmask, 
+                "Gateway":self.ip,
+                "Lease":60, 
+                "DHCP_IP":self.ip
+                })
+            p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
+            p = makePacket(p2, p3)
+            
         else:
             if Device.DEBUG: print(self.id, "Ignoring")
     def generateIP(self):
@@ -321,7 +452,7 @@ class Router(Device):
             x = "10.10.10." + str(random.randint(2, 254))
             if Device.DEBUG: print(self.id, "Finding an IP:", x, "for client (DHCP)")
             if not x in self.leased_ips:
-                self.leased_ips.append(x)
+                #self.leased_ips.append(x)
                 return x
 
 
@@ -335,10 +466,10 @@ if __name__ == "__main__":
 
     A, B, C = Host(), Host(), Host()
     R1 = Router()
-    S1 = Switch([A, B, C, R1])
+    S1 = Switch([A, R1])
     
     print(A, B, C, R1)
     print(S1)
 
-    #A.sendDHCP("Init")
-    A.sendARP(B.id)
+    A.sendDHCP("Init")
+    #A.sendARP(B.id)
