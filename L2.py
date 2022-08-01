@@ -103,7 +103,7 @@ class Device(ABC):
     
     def send(self, data, onlink=None):
         """
-        Send data (a dictionary defined by makePacket_L2()) on a link object.
+        Send data (a dictionary defined by makePacket()) on a link object.
         
         Essentially this method finds the device on the other end of onlink,
         then appends data to its buffer. By default, it sends data out on the
@@ -111,10 +111,11 @@ class Device(ABC):
         or Router, onlink (Link instance) may be defined.
         
         All Devices expect data in the form of a dictionary, defined by the
-        makePacket_L2() function.
+        makePacket() function.
         """
 
         assert isinstance(data, dict)
+        if onlink: assert isinstance(onlink, str)
         if onlink == None:
             onlink = self.interfaces[0].id
         
@@ -259,17 +260,21 @@ class Host(Device):
         # DHCP
         if self.lease[0] >= 0:
             self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-            if self.lease_left <= 0.5 * self.lease[0]:
+            print(self.id, "===", self.lease_left, "/", self.lease[0])
+            if self.lease_left <= 0.5 * self.lease[0] and self.DHCP_FLAG != 1:
+                print("Renewing")
                 self.DHCP_FLAG = 1
+                self.sendDHCP("Renew")
 
     def handleDHCP(self, data): # R of DORA
 
         print(self.id, "got DHCP: ", data)
+
+        # Offer / Ack both have CIP in the DHCP header, so we differentiate with local DHCP_FLAG
         if data["L2"]["To"] == self.id and "CIP" in data["L3"]["Data"]:
             
-            # Receive DHCP Offer
             print(self.id, "flag=", self.DHCP_FLAG)
-            if self.DHCP_FLAG == 0: # Process Offer
+            if self.DHCP_FLAG == 0: # Process Offer, send Request
 
                 print("--", self.id, "received DHCP Offer, sending Request (broadcast)")
                 self.DHCP_FLAG = 1
@@ -299,18 +304,18 @@ class Host(Device):
                 self.lease = (data["L3"]["Data"]["Lease"], int(time.time()))
                 self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
                 self.DHCP_FLAG = 2
-            elif self.DHCP_FLAG == 3: # Renewal
-                self.DHCP_FLAG = 1
-                
-                # Changed from Request: From, SIP, DIP, CIP
-                p2 = makePacket_L2("DHCP", self.id, self.DHCP_MAC)
-                p3 = makePacket_L3(self.ip, self.DHCP_IP, {
-                    "CID":self.id,
-                    "CIP":self.offered_ip,
-                    #"DHCP_IP":data["L3"]["DHCP_IP"] # Just pick the first DHCP server that offers
-                })
-                p = makePacket(p2, p3)
-                self.send(p)
+            #elif self.DHCP_FLAG == 3: # Renewal
+            #    self.DHCP_FLAG = 1
+            #    
+            #    # Changed from Request: From, SIP, DIP, CIP
+            #    p2 = makePacket_L2("DHCP", self.id, self.DHCP_MAC)
+            #    p3 = makePacket_L3(self.ip, self.DHCP_IP, {
+            #        "CID":self.id,
+            #        "CIP":self.offered_ip,
+            #        #"DHCP_IP":data["L3"]["DHCP_IP"] # Just pick the first DHCP server that offers
+            #    })
+            #    p = makePacket(p2, p3)
+            #    self.send(p)
             else:
                 print(self.id, "already assigned IP:", self.ip)
         else:
@@ -318,15 +323,25 @@ class Host(Device):
         
 
     def sendDHCP(self, context, onlink=None): # D of DORA
+        if onlink == None:
+            onlink = self.interfaces[0]
+
         if context == "Init": # Start DORA cycle
-            if onlink == None:
-                onlink = self.interfaces[0]
-            
             print("--", self.id, "sending DHCP Discover")
             # It has layers, like an ogre, or a cake
             # DHCP data is currently in the data field for L3, not sure if that should be L2 instead
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", {"CID":self.id}) # MAC included
             p2 = makePacket_L2("DHCP", self.id, MAC_BROADCAST, onlink.id)
+            p = makePacket(p2, p3)
+            self.send(p)
+        if context == "Renew":
+               
+            # Send DHCP Request again, but with updated credentials: To, SIP, DIP, and no DHCP_IP
+            p2 = makePacket_L2("DHCP", self.id, self.DHCP_MAC)
+            p3 = makePacket_L3(self.ip, self.DHCP_IP, { # Unicast to DHCP server
+                "CID":self.id,
+                "CIP":self.ip,
+            })
             p = makePacket(p2, p3)
             self.send(p)
 
@@ -380,12 +395,15 @@ class Router(Device):
         self.ip = "10.10.10.1"
         self.nmask = "255.255.255.0"
         self.leased_ips = []
+        self.lease_offer = 20
     
     def _checkTimeouts(self):
         pass
 
     def handleDHCP(self, data): # O of DORA
         # Receive client Discover
+
+        print("GOT DATA", data)
         if data["L3"]["SIP"] == "0.0.0.0" and data["L3"]["DIP"] == "255.255.255.255":
             if not "CIP" in data["L3"]["Data"]: # O
                 if Device.DEBUG: print("--Router got a DHCP Discover request, sending Offer")
@@ -398,7 +416,7 @@ class Router(Device):
                     "CID":data["L3"]["Data"]["CID"], 
                     "NMASK":self.nmask, 
                     "Gateway":self.ip,
-                    "Lease":60, 
+                    "Lease":20, 
                     "DHCP_IP":self.ip
                     })
                 p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
@@ -419,7 +437,7 @@ class Router(Device):
                     "CID":data["L3"]["Data"]["CID"], 
                     "NMASK":self.nmask, 
                     "Gateway":self.ip,
-                    "Lease":60, 
+                    "Lease":self.lease_offer, 
                     "DHCP_IP":self.ip
                     })
                 p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
@@ -439,13 +457,16 @@ class Router(Device):
                 "CID":data["L3"]["Data"]["CID"], 
                 "NMASK":self.nmask, 
                 "Gateway":self.ip,
-                "Lease":60, 
+                "Lease":self.lease_offer, 
                 "DHCP_IP":self.ip
                 })
             p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
             p = makePacket(p2, p3)
+
+            self.send(p, data["L2"]["FromLink"])
             
         else:
+            print(data)
             if Device.DEBUG: print(self.id, "Ignoring")
     def generateIP(self):
         while True:
