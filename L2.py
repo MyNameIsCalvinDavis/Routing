@@ -67,12 +67,14 @@ def makePacket_L3(sip="", dip="", data=""):
 # Abstract Base Class
 class Device(ABC):
 
-    # Debug 0 : Show nothing
-    # Debug 1 : Show who talks to who
-    # Debug 2 : Show who sends what to who
-    DEBUG=1
 
     def __init__(self, connectedTo=[]):
+
+        # Debug 0 : Show nothing
+        # Debug 1 : Show who talks to who
+        # Debug 2 : Show who sends what to who
+        self.DEBUG=1
+
         self.id = "___" + str(random.randint(10000, 99999999))
         self.interfaces = []
         self.buffer = []
@@ -148,13 +150,12 @@ class Device(ABC):
         data["L2"]["FromLink"] = onlink # It was you!
 
         end = self.getOtherDeviceOnInterface(onlink)
-        if Device.DEBUG == 1: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"])
-        if Device.DEBUG == 2: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"] + "\n    " + str(data))
+        if self.DEBUG == 1: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"])
+        if self.DEBUG == 2: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"] + "\n    " + str(data))
 
         self.lock.acquire()
         end.buffer.append(data)
         self.lock.release()
-
 
     def listen(self):
         while True:
@@ -163,9 +164,9 @@ class Device(ABC):
             if self.buffer:
                 data = self.buffer.pop(0)
 
-                if Device.DEBUG == 1:
+                if self.DEBUG == 1:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
-                if Device.DEBUG == 2:
+                if self.DEBUG == 2:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
                     
                 if data["L2"]["EtherType"] == "ARP":
@@ -194,16 +195,16 @@ class Device(ABC):
 
         # Receiving an ARP Request
         if data["L2"]["To"] == MAC_BROADCAST and data["L2"]["Data"]["ID"] == self.id:
-            if Device.DEBUG: print(self.id, "got ARP-Rq, sending ARP-Rp")
+            if self.DEBUG: print(self.id, "got ARP-Rq, sending ARP-Rp")
             p2 = makePacket_L2("ARP", self.id, data["L2"]["From"]) # Resp has no data
             p = makePacket(p2)
             self.send(p)
         
         # Receiving an ARP Response
         elif data["L2"]["To"] == self.id:
-            if Device.DEBUG: print("To me!", self.id, "updating ARP table")
+            if self.DEBUG: print("To me!", self.id, "updating ARP table")
         else:
-            if Device.DEBUG: print(self.id, "ignoring", data["L2"]["From"])#, data)
+            if self.DEBUG: print(self.id, "ignoring", data["L2"]["From"])#, data)
 
 
     def getOtherDeviceOnInterface(self, onlinkID):
@@ -263,6 +264,7 @@ class Host(Device):
         self.DHCP_MAC = ""
         self.DHCP_IP = ""
         self.gateway = ""
+        self.current_tx = ""
         
         # On init, begin the DHCP DORA cycle to obtain an IP
         #self.sendDHCP("Init")
@@ -272,19 +274,20 @@ class Host(Device):
         
         if self.lease[0] >= 0:
             self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-            print(self.id, "===", self.lease_left, "/", self.lease[0])
+            # print(self.id, "===", self.lease_left, "/", self.lease[0])
             if self.lease_left <= 0.5 * self.lease[0] and self.DHCP_FLAG != 1:
-                if DEBUG: print("(DHCP)", self.id, "renewing ip", self.ip)
-                print("Renewing")
+                if self.DEBUG: print("(DHCP)", self.id, "renewing ip", self.ip)
                 self.DHCP_FLAG = 1
                 self.sendDHCP("Renew")
 
-    def handleDHCP(self, data): # R of DORA
+    def handleDHCP(self, data):
         
-        if Device.DEBUG == 2: print("(DHCP)", self.id, "got", data)
-        if data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"][53] == 2:  # Process O(ffer) request
+        if self.DEBUG == 2: print("(DHCP)", self.id, "got", data)
+
+        # Process O(ffer) request
+        if data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"][53] == 2 and data["L3"]["Data"]["xid"] == self.current_tx:  
             
-            if Device.DEBUG: print("(DHCP)", self.id, "received DHCP Offer, sending Request (broadcast)")
+            if self.DEBUG: print("(DHCP)", self.id, "received DHCP Offer, sending Request (broadcast)")
             self.DHCP_FLAG = 1
             self.offered_ip = data["L3"]["Data"]["yiaddr"]
             
@@ -299,23 +302,28 @@ class Host(Device):
                 61:self.id, # Client MAC / ID
                 # 55: [1, 3, 6, ...]
             })
+            
+            self.current_tx = DHCP["xid"]
 
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP)
             p2 = makePacket_L2("DHCP", self.id, MAC_BROADCAST)
             
             p = makePacket(p2, p3)
             self.send(p)
-        elif data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"][53] == 5: # Process A(CK)
 
-            if Device.DEBUG: print("(DHCP)", self.id, "received DHCP ACK from", data["L2"]["From"])
+        # Process A(CK)
+        elif data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"][53] == 5 and data["L3"]["Data"]["xid"] == self.current_tx: 
+
+            if self.DEBUG: print("(DHCP)", self.id, "received DHCP ACK from", data["L2"]["From"])
             self.gateway = data["L3"]["Data"][3]
             self.ip = data["L3"]["Data"]["yiaddr"]
             self.nmask = data["L3"]["Data"][1]
             self.lease = (data["L3"]["Data"][51], int(time.time()) )
             self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
             self.DHCP_FLAG = 2
+            self.current_xid = -1
         else:
-            if Device.DEBUG: print(self.id, "ignoring DHCP", data["L2"]["From"])
+            if self.DEBUG: print(self.id, "ignoring DHCP", data["L2"]["From"])
         
 
     def sendDHCP(self, context, onlink=None): # D of DORA
@@ -333,10 +341,13 @@ class Host(Device):
                 # 55: [1, 3, 6, ...]
             })
 
+            self.current_tx = DHCP["xid"]
+
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP) # MAC included
             p2 = makePacket_L2("DHCP", self.id, MAC_BROADCAST, onlink.id)
             p = makePacket(p2, p3)
             self.send(p)
+
         if context == "Renew":
             print("(DHCP)", self.id, "sending DHCP Request (Renewal)")
             # Send Request // TODO Check unicast/Broadcast stuff
@@ -347,6 +358,8 @@ class Host(Device):
                 61:self.id, # Client MAC / ID
                 # 55: [1, 3, 6, ...]
             })
+
+            self.current_tx = DHCP["xid"]
             
             # Now that the IP is active, unicast to DHCP server
             p3 = makePacket_L3(self.ip, self.DHCP_IP, DHCP)
@@ -370,16 +383,18 @@ class Switch(Device):
     
     def handleDHCP(self, data):
         self.handleAll(data)
+    
 
+    # TODO: Dynamic ARP inspection for DHCP packets (DHCP snooping)
     def handleAll(self, data):
         # Before evaluating, add incoming data to ARP table
         self.mti[data["L2"]["From"]] = data["L2"]["FromLink"]
         self.itm[data["L2"]["FromLink"]] = data["L2"]["From"]
-        if Device.DEBUG == 1: print(self.id, "Updated ARP table:", self.mti)
+        if self.DEBUG == 1: print(self.id, "Updated ARP table:", self.mti)
         
         # ARP table lookup
         if data["L2"]["To"] in self.mti:
-            if Device.DEBUG: print(self.id, "Found", data["L2"]["To"], "in ARP table")
+            if self.DEBUG: print(self.id, "Found", data["L2"]["To"], "in ARP table")
             # Grab the link ID associated with the TO field (in the ARP table),
             # then get the link object from that ID
             #link = self.getLinkFromID( self.mti[ data["To"] ])
@@ -387,7 +402,7 @@ class Switch(Device):
             self.send(data, self.mti[ data["L2"]["To"] ])
 
         else: # Flood every interface with the request
-            if Device.DEBUG: print(self.id, "flooding")
+            if self.DEBUG: print(self.id, "flooding")
             for link in self.interfaces:
                 if link.id != data["L2"]["FromLink"]: # Dont send back on the same link
                     # Python shenanigans: Make sure to flood with a *copy*
@@ -415,7 +430,6 @@ class Router(Device):
         # Process D(iscover) request
         if data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"][53] == 1:  
             # Send DHCP Offer
-            if Device.DEBUG: print("(DHCP)", self.id, "received Discover from", data["L2"]["From"])
             clientip = self.generateIP()
             # Broadcast (flags=0) a response (op=2)
             DHCP = Headers.createDHCPHeader(op=2, chaddr=data["L3"]["Data"][61], yiaddr=clientip, options={
@@ -433,8 +447,9 @@ class Router(Device):
             # so do not issue another broadcast
             p = makePacket(p2, p3)
 
-            if Device.DEBUG: print("(DHCP)", self.id, "sending Offer to", data["L2"]["From"])
-            if Device.DEBUG == 2: print(p)
+            if self.DEBUG: print("(DHCP)", self.id, "received Discover from", data["L2"]["From"])
+            if self.DEBUG: print("(DHCP)", self.id, "sending Offer to", data["L2"]["From"])
+            if self.DEBUG == 2: print(p)
             self.send(p, data["L2"]["FromLink"])
 
         # Process R(equest)
@@ -463,16 +478,17 @@ class Router(Device):
             # so do not issue another broadcast
             p = makePacket(p2, p3)
 
-            if Device.DEBUG: print("(DHCP)", self.id, "sending Ack to", data["L2"]["From"])
-            if Device.DEBUG == 2: print(p)
+            if self.DEBUG: print("(DHCP)", self.id, "received Request from", data["L2"]["From"])
+            if self.DEBUG: print("(DHCP)", self.id, "sending Ack to", data["L2"]["From"])
+            if self.DEBUG == 2: print(p)
             self.send(p, data["L2"]["FromLink"])
 
         else:
-            if Device.DEBUG: print(self.id, "Ignoring")
+            if self.DEBUG: print(self.id, "Ignoring")
     def generateIP(self):
         while True:
             x = "10.10.10." + str(random.randint(2, 254))
-            if Device.DEBUG: print("(DHCP)", self.id, "Finding an IP:", x, "for client")
+            if self.DEBUG: print("(DHCP)", self.id, "Finding an IP:", x, "for client")
             if not x in self.leased_ips:
                 #self.leased_ips.append(x)
                 return x
@@ -489,6 +505,7 @@ if __name__ == "__main__":
     A, B, C = Host(), Host(), Host()
     R1 = Router()
     S1 = Switch([A, R1])
+    S1.DEBUG = 0
     
     print(A, B, C, R1)
     print(S1)
