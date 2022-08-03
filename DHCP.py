@@ -41,9 +41,9 @@ class DHCPServer:
             
             # Check if the client wants the message broadcast or unicast
             if data["L3"]["Data"]["flags"]:
-                p2 = makePacket_L2("DHCP", self.id, MAC_BROADCAST, data["L2"]["FromLink"])
+                p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, data["L2"]["FromLink"])
             else:
-                p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
+                p2 = makePacket_L2("IPv4", self.id, data["L2"]["From"], data["L2"]["FromLink"])
 
             p = makePacket(p2, p3, p4)
 
@@ -78,11 +78,11 @@ class DHCPServer:
 
             # Check if the client wants the message broadcast or unicast
             if data["L3"]["Data"]["flags"]:
-                p2 = makePacket_L2("DHCP", self.id, MAC_BROADCAST, data["L2"]["FromLink"])
+                p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, data["L2"]["FromLink"])
             else:
-                p2 = makePacket_L2("DHCP", self.id, data["L2"]["From"], data["L2"]["FromLink"])
+                p2 = makePacket_L2("IPv4", self.id, data["L2"]["From"], data["L2"]["FromLink"])
 
-            p = makePacket(p2, p3)
+            p = makePacket(p2, p3, p4)
 
             if self.DEBUG: print("(DHCP)", self.id, "received Request from", data["L2"]["From"])
             if self.DEBUG: print("(DHCP)", self.id, "sending Ack to", data["L2"]["From"])
@@ -139,7 +139,7 @@ class DHCPClient:
             self.current_tx = DHCP["xid"]
             p4 = makePacket_L4_UDP(68, 67)
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP)
-            p2 = makePacket_L2("DHCP", self.id, MAC_BROADCAST)
+            p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST)
             
             p = makePacket(p2, p3, p4)
             #self.send(p)
@@ -157,7 +157,8 @@ class DHCPClient:
             self.current_xid = -1
             if self.DEBUG: print("(DHCP)", self.id, "received DHCP ACK from", data["L2"]["From"]+".", "New IP:", self.ip)
         else:
-            if self.DEBUG: print(self.id, "ignoring DHCP", data["L2"]["From"])
+            if self.DEBUG: self.genericIgnoreMessage("IPv4", data["L2"]["From"])
+            #if self.DEBUG: print(self.id, "ignoring DHCP", data["L2"]["From"])
         return None, None
 
     # Send D(iscover) or R(equest)
@@ -180,7 +181,7 @@ class DHCPClient:
 
             p4 = makePacket_L4_UDP(68, 67)
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP) # MAC included
-            p2 = makePacket_L2("DHCP", self.id, MAC_BROADCAST, onlink.id)
+            p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, onlink.id)
             p = makePacket(p2, p3, p4)
             #self.send(p)
             return p, None
@@ -199,9 +200,10 @@ class DHCPClient:
             self.current_tx = DHCP["xid"]
             
             # Now that the IP is active, unicast to DHCP server
+            p4 = makePacket_L4_UDP(68, 67)
             p3 = makePacket_L3(self.ip, self.DHCP_IP, DHCP)
-            p2 = makePacket_L2("DHCP", self.id, self.DHCP_MAC)
+            p2 = makePacket_L2("IPv4", self.id, self.DHCP_MAC)
             
-            p = makePacket(p2, p3)
+            p = makePacket(p2, p3, p4)
             #self.send(p)
             return p, None

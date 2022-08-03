@@ -12,11 +12,6 @@ random.seed(123)
 """
 TODO
 ARP resolves an IP to a MAC. So DHCP must run before anything else
-Make sure ARP only communicates over L2, and provides L3 information
-    - Sending ARPS should correctly use L2
-    - Receiving ARPS should correctly identify L2 and provide L3? info (where does the data go? frame or packet?)
-Make sure DHCP 
-
 
 """
 
@@ -119,16 +114,19 @@ class Device(ABC):
             self._checkTimeouts()
             if self.buffer:
                 data = self.buffer.pop(0)
-
                 if self.DEBUG == 1:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
                 if self.DEBUG == 2:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
-                    
-                if data["L2"]["EtherType"] == "ARP": # TODO: Fix ethertype, add L4
+                
+                if data["L2"]["EtherType"] == "ARP":
                     self.handleARP(data)
-                elif data["L2"]["EtherType"] == "DHCP":
-                    self.handleDHCP(data)
+                elif data["L2"]["EtherType"] == "IPv4":
+                    # Handle L4 stuff
+                    if data["L4"]["DPort"] in [67, 68]: # DHCP
+                        self.handleDHCP(data)
+                    else:
+                        if self.DEBUG: print("(Error)", self.id, "not configured for port", data["L4"]["DPort"])
                 else:
                     print(self.id, "ignoring", data["L2"]["From"], data)
     
@@ -138,7 +136,6 @@ class Device(ABC):
             onlinkID = self.interfaces[0].id
         elif not isinstance(onlink, str):
             raise ValueError("onlinkID must be of type <str>")
-
 
         p2 = makePacket_L2("ARP", self.id, MAC_BROADCAST, onlinkID, {"ID":targetID})
         p = makePacket(p2)
@@ -151,16 +148,18 @@ class Device(ABC):
 
         # Receiving an ARP Request
         if data["L2"]["To"] == MAC_BROADCAST and data["L2"]["Data"]["ID"] == self.id:
-            if self.DEBUG: print(self.id, "got ARP-Rq, sending ARP-Rp")
+            if self.DEBUG: print("(ARP)", self.id, "got ARP-Rq, sending ARP-Rp")
             p2 = makePacket_L2("ARP", self.id, data["L2"]["From"]) # Resp has no data
             p = makePacket(p2)
             self.send(p)
         
         # Receiving an ARP Response
         elif data["L2"]["To"] == self.id:
-            if self.DEBUG: print("To me!", self.id, "updating ARP table")
+            #if self.DEBUG: self.genericIgnoreMessage("ARP", data["L2"]["From"])
+            if self.DEBUG: print("(ARP)", self.id, "got ARP Response, updating ARP cache")
         else:
-            if self.DEBUG: print(self.id, "ignoring", data["L2"]["From"])#, data)
+            if self.DEBUG: self.genericIgnoreMessage("ARP", data["L2"]["From"])
+            # if self.DEBUG: print("(ARP)", self.id, "ignoring", data["L2"]["From"])#, data)
 
 
     def getOtherDeviceOnInterface(self, onlinkID):
@@ -202,6 +201,11 @@ class Device(ABC):
     @abstractmethod
     def handleDHCP(self):
         raise NotImplementedError("Must override this method in the child class")
+
+    def genericIgnoreMessage(self, inproto, fr=None):
+        s = ""
+        if fr: s = "from " + fr
+        print("("+inproto+")", self.id, "ignoring data", s)
             
 class Switch(Device):
     def __init__(self, connectedTo=[]):

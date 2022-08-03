@@ -51,7 +51,7 @@ def makePacket_L4_UDP(sp="", dp="", data="", length="", checksum=""):
         "SPort":sp,
         "DPort":dp,
         "Length":length,
-        "Checksum":checksum
+        "Checksum":checksum,
         "Data":data
     }
 
@@ -126,6 +126,3 @@ def createDHCPHeader(op=1, htype=1, hardwareaddrlen=6,
         d[option_name] = option_value
 
     return d
-        
-createUDPHeader(
-
