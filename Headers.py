@@ -4,10 +4,56 @@ import random
 Supported Protocols:
 DHCP
 ARP
-
 """
 
+MAC_BROADCAST="FFFF"
+random.seed(123)
 
+def makePacket(L2="", L3="", L4="", L5="", L6="", L7=""):
+    
+    d = {
+        "L2":L2,
+        "L3":L3,
+        "L4":L4,
+        "L5":L5,
+        "L6":L6,
+        "L7":L7 
+    }
+    
+    for k, v in d.items():
+        if v != "" and not isinstance(v, dict):
+            raise ValueError("Arguments must be of type <dict>")
+
+    return d
+
+# Called a packet & not a frame for consistency's sake
+# An ethernet frame
+def makePacket_L2(ethertype="", fr="", to="", fromlink="", data=""):
+    return {
+        "EtherType":ethertype, # Defines which protocol is encapsulated in data
+        "From":fr,
+        "To":to,
+        "FromLink":fromlink,
+        "Data":data, # ARP packet, IP packet, DHCP packet, etc
+    }
+
+# an IP packet
+def makePacket_L3(sip="", dip="", data=""):
+    return {
+        "SIP":sip, # Src, Dst
+        "DIP":dip,
+        "Data":data
+    }
+
+# L4
+def makePacket_L4_UDP(sp="", dp="", data="", length="", checksum=""):
+    return {
+        "SPort":sp,
+        "DPort":dp,
+        "Length":length,
+        "Checksum":checksum
+        "Data":data
+    }
 
 """
 DHCP RFC 2131
@@ -42,7 +88,7 @@ hardwareaddrlen     Length of hardware address
 hops                TTL
 xid                 Transaction ID, randomly generated
 seconds             Seconds since start of DORA from client, recorded by server
-flags               0: Broadcast --- 1: unicast
+flags               1: Broadcast --- 0: unicast
 ciaddr              Client address
 yiaddr              IP being offered by the server to the client
 siaddr              IP of DHCP server
@@ -54,10 +100,9 @@ options             DORA uses message 53, which is all we will use. This field w
 """
 # https://www.netmanias.com/en/post/techdocs/5998/dhcp-network-protocol/understanding-the-basic-operations-of-dhcp
 # https://avocado89.medium.com/dhcp-packet-analysis-c84827e162f0
-# Should fill in: op, xid, ciaddr, yiaddr, siaddr, giaddr, chaddr
 def createDHCPHeader(op=1, htype=1, hardwareaddrlen=6,
                      hops=-1, xid=random.randint(1000000000, 9999999999),
-                     seconds=0, flags=0, ciaddr="0.0.0.0", yiaddr="0.0.0.0",
+                     seconds=0, flags=1, ciaddr="0.0.0.0", yiaddr="0.0.0.0",
                      siaddr="0.0.0.0",giaddr="0.0.0.0", chaddr="", options={}):
 
     d = {
@@ -82,5 +127,5 @@ def createDHCPHeader(op=1, htype=1, hardwareaddrlen=6,
 
     return d
         
-
+createUDPHeader(
 
