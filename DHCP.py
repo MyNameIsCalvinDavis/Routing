@@ -1,6 +1,22 @@
 from Headers import *
 import time
 
+# This DHCP S/C implements most of the "MUST" functionality
+# described in RFC2131, with the exception being retransmission
+# of lost or dropped packets. Not all options are implemented.
+
+#https://datatracker.ietf.org/doc/html/rfc2131#section-2.2
+# https://www.netmanias.com/en/post/techdocs/5998/dhcp-network-protocol/understanding-the-basic-operations-of-dhcp
+# https://avocado89.medium.com/dhcp-packet-analysis-c84827e162f0
+
+
+#class DHCPBase:
+#    def __init__(self):
+#        pass
+#
+#    def parseOptions(self, 
+
+
 # Not a Device, just deals with DHCP functionality
 # then returns output to the host / whatever it's inside of
 class DHCPServer:
@@ -11,7 +27,41 @@ class DHCPServer:
         self.lease_offer = 20
         self.id = haddr
         self.DEBUG = DEBUG
+        
+        # TODO Add DHCP NAK / etc messages
+        
+        # Keep track of states for ongoing client transactions,
+        # client is deleted after DHCP ACK
+        #self.client_msgtype = {}
 
+    
+    def handleRequestedOptions(self, data):
+        """
+        Receive and parse opts (a list of #s) from the client's option 55
+        Return a dict with each option filled out
+        Not all options are implemented
+
+        See https://www.iana.org/assignments/bootp-dhcp-parameters/bootp-dhcp-parameters.xhtml#options
+        """
+        
+        result = {}
+        if not 55 in data["L3"]["Data"]["options"]:
+            return result
+
+        for opt in data["L3"]["Data"]["options"][55]: # TODO: What options can a client request?
+            if opt == 1: # Subnet mask
+                result[opt] = self.nmask
+            if opt == 3: # Router Addr
+                result[opt] = self.ip
+            if opt == 6: # DNS Server
+                result[opt] = "" # Not doing DNS
+            if opt == 51: # Lease Offer
+                result[opt] = self.lease_offer
+            if opt == 54: # DHCP Server IP
+                result[opt] = self.ip
+
+        return result
+                
     def generateIP(self):
         while True:
             x = "10.10.10." + str(random.randint(2, 254))
@@ -20,74 +70,109 @@ class DHCPServer:
                 #self.leased_ips.append(x)
                 return x
 
-    def handleDHCP(self, data): # O of DORA
+    def handleDHCP(self, data): # Send (O)ffer
 
         # Process D(iscover) request
-        if data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"][53] == 1:  
+        if data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"]["options"][53] == 1:  
             # Send DHCP Offer
             clientip = self.generateIP()
-            # Broadcast (flags=0) a response (op=2)
-            DHCP = createDHCPHeader(op=2, chaddr=data["L3"]["Data"][61], yiaddr=clientip, options={
-                    1:self.nmask, # Netmask
-                    3:self.ip, # Router IP
-                    6:"", # Not doing DNS
-                    51: self.lease_offer,
-                    53:2, # DHCP Offer
-                    54:self.ip # DHCP Server identifier
-                })
 
+            # Check clients requested options & satisfy them, if any
+            requested_options = self.handleRequestedOptions( data )
+
+            # RFC2131 S4.3.1 Table 3
+            # Server must send: 51      53      54      55 if applicable
+            #                   Lease   MsgType SrvID   Requested Params
+            server_options = {
+                51: self.lease_offer,
+                53: 2, # DHCP Offer
+                54: self.ip # DHCP Server ID
+            }
+
+            options = mergeDicts(requested_options, server_options)
+
+            # Broadcast (flags=0) a response (op=2) # TODO: Verify with table 4.3.1$3
+            DHCP = createDHCPHeader(op=2, 
+                    chaddr=data["L3"]["Data"]["chaddr"],
+                    yiaddr=clientip,
+                    options=options
+                )
             p4 = makePacket_L4_UDP(67, 68)
             p3 = makePacket_L3(self.ip, "255.255.255.255", DHCP)
             
             # Check if the client wants the message broadcast or unicast
-            if data["L3"]["Data"]["flags"]:
-                p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, data["L2"]["FromLink"])
-            else:
-                p2 = makePacket_L2("IPv4", self.id, data["L2"]["From"], data["L2"]["FromLink"])
+            p2 = makePacket_L2("IPv4", 
+                    self.id, # From
+                    MAC_BROADCAST if data["L3"]["Data"]["flags"] else data["L2"]["From"], # To
+                    data["L2"]["FromLink"] # Onlink
+                )
+
+            #if data["L3"]["Data"]["flags"]:
+            #    p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, data["L2"]["FromLink"])
+            #else:
+            #    p2 = makePacket_L2("IPv4", self.id, data["L2"]["From"], data["L2"]["FromLink"])
 
             p = makePacket(p2, p3, p4)
 
             if self.DEBUG: print("(DHCP)", self.id, "received Discover from", data["L2"]["From"])
             if self.DEBUG: print("(DHCP)", self.id, "sending Offer to", data["L2"]["From"])
             if self.DEBUG == 2: print(p)
-            #self.send(p, data["L2"]["FromLink"])
             return p, data["L2"]["FromLink"]
 
         # Process R(equest)
-        elif data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"][53] == 3:
+        elif data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"]["options"][53] == 3:
             # Send a DHCP Ack
             
+            # Client sent option 50, the requested / assigned IP
             if data["L3"]["Data"]["ciaddr"] == "0.0.0.0": # R(equest)
-                yiaddr = data["L3"]["Data"][50]
-            else:
-                # For some reason, the client doesnt have to send option 50 here
-                # and the server instead looks at ciaddr for the renewal
+                yiaddr = data["L3"]["Data"]["options"][50]
+            else: #R(enewal)
                 yiaddr = data["L3"]["Data"]["ciaddr"]
-                
-            DHCP = createDHCPHeader(op=2, chaddr=data["L3"]["Data"][61], yiaddr=yiaddr, options={
-                    1:self.nmask, # Netmask
-                    3:self.ip, # Router IP
-                    6:"", # Not doing DNS
-                    51: self.lease_offer,
-                    53:5, # DHCP Ack
-                    54:self.ip # DHCP Server identifier
-                }) # TODO: Add lease expriation / updating
+            
+            # Check clients requested options & satisfy them, if any
+            requested_options = self.handleRequestedOptions( data )
+
+            # RFC2131 S4.3.1 Table 3
+            # Server must send: 51      53      54      55 if applicable
+            #                   Lease   MsgType SrvID   Requested Params
+            server_options = {
+                51: self.lease_offer,
+                53: 5, # DHCP ACK
+                54: self.ip # DHCP Server ID
+            }
+
+            options = mergeDicts(requested_options, server_options)
+
+            # Broadcast (flags=0) a response (op=2) # TODO: Verify with table 4.3.1$3
+            DHCP = createDHCPHeader(op=2, 
+                    chaddr=data["L3"]["Data"]["chaddr"],
+                    yiaddr=yiaddr,
+                    options=options
+                ) # TODO: Lease expiration
 
             p4 = makePacket_L4_UDP(67, 68)
             p3 = makePacket_L3(self.ip, "255.255.255.255", DHCP)
 
             # Check if the client wants the message broadcast or unicast
-            if data["L3"]["Data"]["flags"]:
-                p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, data["L2"]["FromLink"])
-            else:
-                p2 = makePacket_L2("IPv4", self.id, data["L2"]["From"], data["L2"]["FromLink"])
-
+            p2 = makePacket_L2("IPv4", 
+                    self.id, # From
+                    MAC_BROADCAST if data["L3"]["Data"]["flags"] else data["L2"]["From"], # To
+                    data["L2"]["FromLink"] # Onlink
+                )
             p = makePacket(p2, p3, p4)
 
             if self.DEBUG: print("(DHCP)", self.id, "received Request from", data["L2"]["From"])
             if self.DEBUG: print("(DHCP)", self.id, "sending Ack to", data["L2"]["From"])
             if self.DEBUG == 2: print(p)
-            #self.send(p, data["L2"]["FromLink"])
+            
+            # IP: (chaddr, lease_offer, lease_give_time)
+            # Update leased IP
+    
+
+            # TODO: Let client define client identifier
+            # and revisit default client ID in this dict
+            self.leased_ips[yiaddr] = (data["L2"]["From"], self.lease_offer, time.time())
+
             return p, data["L2"]["FromLink"]
 
         else:
@@ -99,6 +184,8 @@ class DHCPClient:
         self.id = haddr
         self.interfaces = interfaces
         self.DEBUG = DEBUG
+        
+        self.requested_options = [1,3,6]
         
         # L3
         self.ip = ""
@@ -118,46 +205,52 @@ class DHCPClient:
         if self.DEBUG == 2: print("(DHCP)", self.id, "got", data)
 
         # Process O(ffer)
-        if data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"][53] == 2 and data["L3"]["Data"]["xid"] == self.current_tx:  
+        if data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"]["options"][53] == 2 and data["L3"]["Data"]["xid"] == self.current_tx:  
+            # Send R(equest)
             
             if self.DEBUG: print("(DHCP)", self.id, "received DHCP Offer, sending Request (broadcast)")
             self.DHCP_FLAG = 1
             self.offered_ip = data["L3"]["Data"]["yiaddr"]
-            self.DHCP_IP = data["L3"]["Data"][6]
-            self.DHCP_MAC = data["L2"]["From"]
+            self.DHCP_IP = data["L3"]["SIP"] if not 6 in data["L3"]["Data"]["options"] else data["L3"]["Data"]["options"][6]
+            self.DHCP_MAC = data["L2"]["From"] # Not reliable if not on same network
 
-            # Send R(equest)
-            # Broadcast by default (flags=1)
-            DHCP = createDHCPHeader(chaddr=self.id, flags=1, options={
-                50:self.offered_ip, # Client requesting this IP
-                53:3, # Request
-                54:self.DHCP_IP, # DHCP siaddr
-                61:self.id, # Client MAC / ID
-                # 55: [1, 3, 6, ...]
-            })
-            
-            self.current_tx = DHCP["xid"]
+            # RFC2131 S4.4.1 Table 5
+            # Client must send: 50      53      54
+            #                   AddrRq  MsgType SrvID                                
+            options = {
+                50: self.offered_ip,
+                53: 3, # Request
+                54: self.DHCP_IP, # DHCP siaddr
+                55: self.requested_options # Same as before
+            }
+
+            DHCP = createDHCPHeader(chaddr=self.id, flags=1, options=options)
+
             p4 = makePacket_L4_UDP(68, 67)
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP)
             p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST)
-            
             p = makePacket(p2, p3, p4)
-            #self.send(p)
+
+            #self.current_tx = DHCP["xid"]
             return p, None
 
         # Process A(CK)
-        elif data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"][53] == 5 and data["L3"]["Data"]["xid"] == self.current_tx: 
+        elif data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"]["options"][53] == 5 and data["L3"]["Data"]["xid"] == self.current_tx: 
+            
+            if 1 in self.requested_options:
+                self.nmask = data["L3"]["Data"]["options"][1]
+            if 3 in self.requested_options:
+                self.gateway = data["L3"]["Data"]["options"][3]
+            # if 6 in ... (DNS)
 
-            self.gateway = data["L3"]["Data"][3]
             self.ip = data["L3"]["Data"]["yiaddr"]
-            self.nmask = data["L3"]["Data"][1]
-            self.lease = (data["L3"]["Data"][51], int(time.time()) )
+            self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
             self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
             self.DHCP_FLAG = 2
             self.current_xid = -1
             if self.DEBUG: print("(DHCP)", self.id, "received DHCP ACK from", data["L2"]["From"]+".", "New IP:", self.ip)
         else:
-            if self.DEBUG: self.genericIgnoreMessage("IPv4", data["L2"]["From"])
+            if self.DEBUG: genericIgnoreMessage("DHCP", data["L2"]["From"])
             #if self.DEBUG: print(self.id, "ignoring DHCP", data["L2"]["From"])
         return None, None
 
@@ -170,40 +263,44 @@ class DHCPClient:
         if context == "Init": 
             print("(DHCP)", self.id, "sending DHCP Discover")
             
-            # (flags=1) Tell server to broadcast back, not unicast
-            DHCP = createDHCPHeader(chaddr=self.id, options={
-                61:self.id, # Client MAC / ID
-                53:1 # Discover
-                # 55: [1, 3, 6, ...]
-            })
+            # RFC2131 S4.4.1 Table 5
+            # Client must send: 53
+            #                   MsgType
+            options = {
+                53: 1, # Discover
+                55: self.requested_options
+            }
 
-            self.current_tx = DHCP["xid"]
-
+            DHCP = createDHCPHeader(chaddr=self.id, options=options)
+            
             p4 = makePacket_L4_UDP(68, 67)
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP) # MAC included
             p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, onlink.id)
             p = makePacket(p2, p3, p4)
-            #self.send(p)
+
+            self.current_tx = DHCP["xid"]
             return p, None
         
-        # Send R(equest)
+        # Send R(equest) renewal
         if context == "Renew":
             print("(DHCP)", self.id, "sending DHCP Request (Renewal)")
 
-            # Renew: ciaddr filled (NOT option 50) (why not? who knows)
-            DHCP = createDHCPHeader(chaddr=self.id, ciaddr=self.ip, options={
-                53:3, # Request
-                61:self.id, # Client MAC / ID
-                # 55: [1, 3, 6, ...]
-            })
+            # RFC2131 S4.4.1 Table 5
+            # Client must send: 53
+            #                   MsgType
+            options = {
+                53: 3, # Request
+                55: self.requested_options
+            }
 
-            self.current_tx = DHCP["xid"]
-            
+            # Renew: ciaddr filled (NOT option 50)
+            DHCP = createDHCPHeader(chaddr=self.id, ciaddr=self.ip, options=options)
+
             # Now that the IP is active, unicast to DHCP server
             p4 = makePacket_L4_UDP(68, 67)
             p3 = makePacket_L3(self.ip, self.DHCP_IP, DHCP)
             p2 = makePacket_L2("IPv4", self.id, self.DHCP_MAC)
-            
             p = makePacket(p2, p3, p4)
-            #self.send(p)
+
+            self.current_tx = DHCP["xid"]
             return p, None

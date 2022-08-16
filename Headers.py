@@ -9,6 +9,26 @@ ARP
 MAC_BROADCAST="FFFF"
 random.seed(123)
 
+def mergeDicts(x, y):
+    """
+    It turns out that merging two dicts differs heavily 
+    depending on the python version you use, so we home 
+    brew a solution to not worry about differences within 
+    3.x versions of python
+
+    importantly, y overwrites keys in x if overlap
+    """
+
+    for k, v in y.items():
+        x[k] = v
+    
+    return x
+
+def genericIgnoreMessage(self, inproto, fr=None):
+    s = ""
+    if fr: s = "from " + fr
+    print("("+inproto+")", self.id, "ignoring data", s)
+
 def makePacket(L2="", L3="", L4="", L5="", L6="", L7=""):
     
     d = {
@@ -103,7 +123,7 @@ options             DORA uses message 53, which is all we will use. This field w
 def createDHCPHeader(op=1, htype=1, hardwareaddrlen=6,
                      hops=-1, xid=random.randint(1000000000, 9999999999),
                      seconds=0, flags=1, ciaddr="0.0.0.0", yiaddr="0.0.0.0",
-                     siaddr="0.0.0.0",giaddr="0.0.0.0", chaddr="", options={}):
+                     siaddr="0.0.0.0",giaddr="0.0.0.0", chaddr="", options=[]):
 
     d = {
         "op":op,
@@ -119,10 +139,11 @@ def createDHCPHeader(op=1, htype=1, hardwareaddrlen=6,
         "giaddr":giaddr,
         "chaddr":chaddr,
         "sname":"",
-        "file":""
+        "file":"",
+        "options":options
     }
 
-    for option_name, option_value in options.items():
-        d[option_name] = option_value
+    #for option_name, option_value in options.items():
+    #    d[option_name] = option_value
 
     return d

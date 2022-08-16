@@ -155,10 +155,10 @@ class Device(ABC):
         
         # Receiving an ARP Response
         elif data["L2"]["To"] == self.id:
-            #if self.DEBUG: self.genericIgnoreMessage("ARP", data["L2"]["From"])
+            #if self.DEBUG: genericIgnoreMessage("ARP", data["L2"]["From"])
             if self.DEBUG: print("(ARP)", self.id, "got ARP Response, updating ARP cache")
         else:
-            if self.DEBUG: self.genericIgnoreMessage("ARP", data["L2"]["From"])
+            if self.DEBUG: genericIgnoreMessage("ARP", data["L2"]["From"])
             # if self.DEBUG: print("(ARP)", self.id, "ignoring", data["L2"]["From"])#, data)
 
 
@@ -202,10 +202,6 @@ class Device(ABC):
     def handleDHCP(self):
         raise NotImplementedError("Must override this method in the child class")
 
-    def genericIgnoreMessage(self, inproto, fr=None):
-        s = ""
-        if fr: s = "from " + fr
-        print("("+inproto+")", self.id, "ignoring data", s)
             
 class Switch(Device):
     def __init__(self, connectedTo=[]):
@@ -285,10 +281,17 @@ class Host(Device):
             self.send(p, link)
         else:
             # Extract all of the goodies
-            self.gateway = data["L3"]["Data"][3]
+            
+            self.nmask = "255.255.255.255"
+            self.gateway = "0.0.0.0"
+
+            if 1 in data["L3"]["Data"]["options"]:
+                self.nmask = data["L3"]["Data"]["options"][1]
+            if 3 in data["L3"]["Data"]["options"]:
+                self.gateway = data["L3"]["Data"]["options"][3]
+
             self.ip = data["L3"]["Data"]["yiaddr"]
-            self.nmask = data["L3"]["Data"][1]
-            self.lease = (data["L3"]["Data"][51], int(time.time()) )
+            self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
             self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
             self.DHCP_FLAG = 2
             self.current_xid = -1
@@ -312,7 +315,20 @@ class Router(Device):
         self.DHCPServer = DHCPServer(self.ip, self.nmask, self.id, self.DEBUG)
 
     def _checkTimeouts(self):
-        pass
+        # DHCP lease expiry check
+        # IP: (chaddr, lease_offer, lease_give_time)
+        del_ips = []
+        for k, v in self.DHCPServer.leased_ips.items():
+            time_left = (v[2] + v[1]) - int(time.time())
+            if time_left <= 0:
+                # For now, just delete the entry. TODO: Clean up entry deletion procedure per RFC
+                # Mark the entry as deleted
+                del_ips.append(k)
+
+        # Then, actually delete it
+        for key in del_ips: del self.DHCPServer.leased_ips[k]
+
+        
 
     def handleDHCP(self, data): # O of DORA
         response, link = self.DHCPServer.handleDHCP(data)
