@@ -20,10 +20,10 @@ A, B, C = Host(), Host(), Host()
 S1 = Switch([A, B, C])
 ```
 
-Devices can then speak to each other as expected, via a dict representation of packed frames . In our example, host A sends an ARP request looking for host B. We must pack the frame ourselves, though some of the data can be inferred, and of course you can wrap this functionality:
+Devices can then speak to each other as expected, via a dict representation of packed frames. In our example, host A sends an ARP request looking for host B. We must pack the frame ourselves, though some of the data can be inferred, and of course you can wrap this functionality:
 ```python
 >>> # The provided Device.sendARP() method abstracts this process
->>> p = makePacket_L2(ethertype="ARP", fr=A.id, to=MAC_BROADCAST, data=data={"ID":B.id})
+>>> p = makePacket_L2(ethertype="ARP", fr=A.id, to=MAC_BROADCAST, data={"ID":B.id})
 >>> p
 {
   "EtherType":"ARP",

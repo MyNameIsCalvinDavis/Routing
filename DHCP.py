@@ -5,16 +5,17 @@ import time
 # described in RFC2131, with the exception being retransmission
 # of lost or dropped packets. Not all options are implemented.
 
-#https://datatracker.ietf.org/doc/html/rfc2131#section-2.2
+# For example, DHCPNAK is not implemented as it is technically
+# "SHOULD" functionality per 3.1.4, so the server silently
+# rejects invalid requests instead
+
+# https://datatracker.ietf.org/doc/html/rfc2131#section-2.2
 # https://www.netmanias.com/en/post/techdocs/5998/dhcp-network-protocol/understanding-the-basic-operations-of-dhcp
 # https://avocado89.medium.com/dhcp-packet-analysis-c84827e162f0
 
-
-#class DHCPBase:
-#    def __init__(self):
-#        pass
-#
-#    def parseOptions(self, 
+# TODO: Implement DHCP Client retransmission / timeouts
+# TODO: DHCP Snooping
+# TODO: Verify lease expiration
 
 
 # Not a Device, just deals with DHCP functionality
@@ -67,7 +68,6 @@ class DHCPServer:
             x = "10.10.10." + str(random.randint(2, 254))
             if self.DEBUG: print("(DHCP)", self.id, "Finding an IP:", x, "for client")
             if not x in self.leased_ips:
-                #self.leased_ips.append(x)
                 return x
 
     def handleDHCP(self, data): # Send (O)ffer
@@ -148,7 +148,7 @@ class DHCPServer:
                     chaddr=data["L3"]["Data"]["chaddr"],
                     yiaddr=yiaddr,
                     options=options
-                ) # TODO: Lease expiration
+                )
 
             p4 = makePacket_L4_UDP(67, 68)
             p3 = makePacket_L3(self.ip, "255.255.255.255", DHCP)
@@ -168,10 +168,15 @@ class DHCPServer:
             # IP: (chaddr, lease_offer, lease_give_time)
             # Update leased IP
     
-
-            # TODO: Let client define client identifier
-            # and revisit default client ID in this dict
-            self.leased_ips[yiaddr] = (data["L2"]["From"], self.lease_offer, time.time())
+            
+            # If client defines a client identifier (61), use it
+            # otherwise clientID is chaddr + IP
+            # TODO: Find out how this table is actually formatted
+            if 61 in data["L3"]["Data"]["options"]:
+                self.leased_ips[yiaddr] = (data["L3"]["Data"]["options"][61], self.lease_offer, time.time())
+            else:
+                combo = data["L2"]["From"] + yiaddr
+                self.leased_ips[yiaddr] = (combo, self.lease_offer, time.time())
 
             return p, data["L2"]["FromLink"]
 

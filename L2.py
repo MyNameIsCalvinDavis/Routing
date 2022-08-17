@@ -24,7 +24,10 @@ class Device(ABC):
         # Debug 0 : Show nothing
         # Debug 1 : Show who talks to who
         # Debug 2 : Show who sends what to who
-        self.DEBUG=1
+        self.DEBUG = 1
+
+        # For visualization purposes
+        self.send_delay = 0.5
 
         self.id = "___" + str(random.randint(10000, 99999999))
         self.interfaces = []
@@ -32,12 +35,14 @@ class Device(ABC):
         self.mti = {} # MAC to interface
         self.lock = threading.Lock()
 
+        self.thread_exit = False
+        self._initConnections(connectedTo)
+
         # Start the listening thread on this device
         x = threading.Thread(target=self.listen, args=())
         x.start()
 
 
-        self._initConnections(connectedTo)
 
 
     def _initConnections(self, connectedTo):
@@ -110,7 +115,8 @@ class Device(ABC):
 
     def listen(self):
         while True:
-            time.sleep(0.5)
+            if self.thread_exit: return
+            time.sleep(self.send_delay)
             self._checkTimeouts()
             if self.buffer:
                 data = self.buffer.pop(0)
@@ -132,9 +138,11 @@ class Device(ABC):
     
     def sendARP(self, targetID, onlinkID=None):
         """ ARP Wrapper for self.send() """
+        print(self.DEBUG)
+        if self.DEBUG: print(self.id, "sending ARP request to", targetID)
         if onlinkID == None:
             onlinkID = self.interfaces[0].id
-        elif not isinstance(onlink, str):
+        elif not isinstance(onlinkID, str):
             raise ValueError("onlinkID must be of type <str>")
 
         p2 = makePacket_L2("ARP", self.id, MAC_BROADCAST, onlinkID, {"ID":targetID})
@@ -326,7 +334,9 @@ class Router(Device):
                 del_ips.append(k)
 
         # Then, actually delete it
-        for key in del_ips: del self.DHCPServer.leased_ips[k]
+        if del_ips:
+            for key in del_ips: del self.DHCPServer.leased_ips[k]
+            if self.DEBUG: print("(DHCP)", self.id, "deleted entries from lease table")
 
         
 

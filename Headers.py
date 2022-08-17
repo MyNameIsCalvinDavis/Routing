@@ -123,7 +123,7 @@ options             DORA uses message 53, which is all we will use. This field w
 def createDHCPHeader(op=1, htype=1, hardwareaddrlen=6,
                      hops=-1, xid=random.randint(1000000000, 9999999999),
                      seconds=0, flags=1, ciaddr="0.0.0.0", yiaddr="0.0.0.0",
-                     siaddr="0.0.0.0",giaddr="0.0.0.0", chaddr="", options=[]):
+                     siaddr="0.0.0.0",giaddr="0.0.0.0", chaddr="", options={}):
 
     d = {
         "op":op,
