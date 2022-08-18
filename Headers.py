@@ -58,14 +58,26 @@ def makePacket_L2(ethertype="", fr="", to="", fromlink="", data=""):
     }
 
 # an IP packet
-def makePacket_L3(sip="", dip="", data=""):
+def makePacket_L3(sip, dip, data="", TTL=10, proto=None):
     return {
+        "Version":4, # Make a new parameter if you love 6 so much, nerd
+        "HLEN":0, # unimplemented until we care about fragmentation
+        "TOS":0, # unused
+        "TotalLength":0
+        "ID":random.randint(0, 2^16), # fragmentation
+        "Flags":0, # fragmentation
+        "FOffset":0,
+        "TTL":TTL,
+
+        # https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
+        # For "Protocol" we'll probably just use names to not confuse ourselves
+        "Protocol":proto,
+        "Checksum":0,
         "SIP":sip, # Src, Dst
         "DIP":dip,
         "Data":data
     }
 
-# L4
 def makePacket_L4_UDP(sp="", dp="", data="", length="", checksum=""):
     return {
         "SPort":sp,
