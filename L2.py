@@ -8,16 +8,9 @@ from DHCP import DHCPServerHandler, DHCPClientHandler
 
 random.seed(123)
 
-
-"""
-TODO
-ARP resolves an IP to a MAC. So DHCP must run before anything else
-
-"""
-
 # Abstract Base Class
 class Device(ABC):
-    def __init__(self, ips=[], connectedTo=[], debug=1):
+    def __init__(self, connectedTo=[], debug=1): # Device
 
         # Debug 0 : Show nothing
         # Debug 1 : Show who talks to who
@@ -25,7 +18,7 @@ class Device(ABC):
         self.DEBUG = debug
 
         # For visualization purposes
-        self.send_delay = 0.5
+        self.listen_delay = 0.5
 
         self.id = "___" + str(random.randint(10000, 99999999))
         self.links = []
@@ -33,66 +26,28 @@ class Device(ABC):
         self.mti = {} # MAC to interface
         self.lock = threading.Lock()
         
-        # Make ips always be a list, with ["0.0.0.0"] as default
-        if ips: self.ips = ips
-        else:   self.ips = ["0.0.0.0"]
-        if isinstance(self.ips, str): self.ips = [self.ips]
-
-        self.linkid_to_ip = {}
-
         self.thread_exit = False
-        self._initConnections(connectedTo)
+        #self._initConnections(connectedTo)
 
         # Start the listening thread on this device
-        x = threading.Thread(target=self.listen, args=())
-        x.start()
-
-    @property
-    def ip(self):
-        # Return the first link's associated ip
-        try:
-            linkid = self.links[0].id # First link id
-            ip = self.linkid_to_ip[linkid]
-            return ip
-        except Exception as e:
-            print("---ERROR: ", e)
-            return None
+        self.lthread = threading.Thread(target=self.listen, args=())
+        self.lthread.start()
     
-    @ip.setter
-    def ip(self, val):
-        if isinstance(val, tuple): # self.ip = ("0.0.0.0", <LINKID>)
-            onlinkid = val[1]
-            self.linkid_to_ip[onlinkid] = val[0]
+    #def __del__(self):
+    #    # If this object falls out of scope, safely terminate the running thread
+    #    self.thread_exit = True
+    #    if self.DEBUG: print(self.id, "killing thread:", end="")
+    #    self.lthread.join() # Wait til the thread terminates
+    #    if self.DEBUG: print("DONE")
 
-        elif isinstance(val, str): # self.ip = "0.0.0.0"
-            onlinkid = self.links[0].id
-            self.linkid_to_ip[onlinkid] = val
-        else:
-            raise("Can't set IP to " + str(type(val)) )
-
+    @abstractmethod
     def _initConnections(self, connectedTo):
-        """
-        Create a link between me and every device in connectedTo, and vice versa.
-        Upon forming a link, a device now has an interface and an IP
-        """
-        for device in connectedTo:
-            link = Link([self, device])
-            if not link in self.links:
-                self.ip = ("0.0.0.0", link.id)
-                self.links.append(link)
-            if not link in device.links:
-                device.ip = ("0.0.0.0", link.id)
-                device.links.append(link)
-                device._associateIPsToLinks() # Possibly in need of a lock
-
-        self._associateIPsToLinks()
-
-    def _associateIPsToLinks(self):
-        # Given self.links, associate each with the provided self.ips
-        # len(ips) may be >= len(links), but not the other way around
-        
-        for i in range(len(self.links)):
-            self.linkid_to_ip[self.links[i]] = self.ips[i]
+        raise NotImplementedError("Must override this method in the child class")
+    
+    # Some L2 devices won't have timeouts; too bad
+    @abstractmethod   
+    def _checkTimeouts(self):
+        raise NotImplementedError("Must override this method in the child class")
 
     def __str__(self):
         s = "\n" + self.id + "\n"
@@ -151,28 +106,6 @@ class Device(ABC):
         end.buffer.append(data)
         self.lock.release()
 
-    def listen(self):
-        while True:
-            if self.thread_exit: return
-            time.sleep(self.send_delay)
-            self._checkTimeouts()
-            if self.buffer:
-                data = self.buffer.pop(0)
-                if self.DEBUG == 1:
-                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
-                if self.DEBUG == 2:
-                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
-                
-                if data["L2"]["EtherType"] == "ARP":
-                    self.handleARP(data)
-                elif data["L2"]["EtherType"] == "IPv4":
-                    # Handle L4 stuff
-                    if data["L4"]["DPort"] in [67, 68]: # DHCP
-                        self.handleDHCP(data)
-                    else:
-                        if self.DEBUG: print("(Error)", self.id, "not configured for port", data["L4"]["DPort"])
-                else:
-                    print(self.id, "ignoring", data["L2"]["From"], data)
     
     def sendARP(self, targetID, onlinkID=None):
         """ ARP Wrapper for self.send() """
@@ -232,43 +165,175 @@ class Device(ABC):
             if link.id == ID:
                 return link
 
-    # Routers & Hosts need this but Switches do not, so instead of 
-    # doing the right (?) thing and overriding listen() in the child
-    # classes, I'm just doing this because it ends up being less duplicated code.
-    # The alternative is each subclass that uses timeouts will implement both their
-    # own version of listen, and their own version of this method, which will
-    # get messy. I could also break up the class hierarchy, but that would
-    # make the inheritence unintuitive - instead, all devices must implement
-    # this function, even if they do nothing with it.
-    @abstractmethod   
-    def _checkTimeouts(self):
-        raise NotImplementedError("Must override this method in the child class")
     
-    # We provide a way to handle DHCP requests if desired,
-    # otherwise just do nothing with this method in any children
+class L2Device(Device):
+    def __init__(self, connectedTo=[], debug=1):
+        super().__init__(connectedTo, debug)
+        self.itm = {}
+        self._initConnections(connectedTo)
+
     @abstractmethod
-    def handleDHCP(self):
+    def handleAll(data):
         raise NotImplementedError("Must override this method in the child class")
 
+    def listen(self):
+        while True:
+            if self.thread_exit: return
+            time.sleep(self.listen_delay)
+            self._checkTimeouts()
+            if self.buffer:
+                data = self.buffer.pop(0)
+                if self.DEBUG == 1:
+                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
+                if self.DEBUG == 2:
+                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
+                
+                self.handleAll(data)
+
+    def _initConnections(self, connectedTo):
+        """
+        Create a link between me and every device in connectedTo, and vice versa.
+        """
+        for device in connectedTo:
+            link = Link([self, device])
+            if not link in self.links:
+                self.links.append(link)
+            if not link in device.links:
+                device.links.append(link)
+                if isinstance(device, L3Device):
+                    device.ip = ("0.0.0.0", link.id)
+                    device._associateIPsToLinks() # Possibly in need of a lock
+
+
+class L3Device(Device):
+    def __init__(self, ips=[], connectedTo=[], debug=1): # L3Device
+        super().__init__(connectedTo, debug) # L3Device
+
+        # Make ips always be a list, with ["0.0.0.0"] as default
+        if ips: self.ips = ips
+        else:   self.ips = ["0.0.0.0"]
+        if isinstance(self.ips, str): self.ips = [self.ips]
+
+        self.linkid_to_ip = {}
+        self._initConnections(connectedTo)
+
+    def listen(self):
+        while True:
+            if self.thread_exit: return
+            time.sleep(self.listen_delay)
+            self._checkTimeouts()
+            if self.buffer:
+                data = self.buffer.pop(0)
+                if self.DEBUG == 1:
+                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
+                if self.DEBUG == 2:
+                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
+                
+                if data["L2"]["EtherType"] == "ARP":
+                    self.handleARP(data)
+                elif data["L2"]["EtherType"] == "IPv4":
+                    # Handle L4 stuff
+                    if data["L4"]["DPort"] in [67, 68]: # DHCP
+                        self.handleDHCP(data)
+                    else:
+                        if self.DEBUG: print("(Error)", self.id, "not configured for port", data["L4"]["DPort"])
+                else:
+                    print(self.id, "ignoring", data["L2"]["From"], data)
+
+    def _initConnections(self, connectedTo):
+        """
+        Create a link between me and every device in connectedTo, and vice versa.
+        Upon forming a link, a device now has an interface and an IP
+        """
+        for device in connectedTo:
+            link = Link([self, device])
+            if not link in self.links:
+                self.ip = ("0.0.0.0", link.id)
+                self.links.append(link)
+            if not link in device.links:
+                device.links.append(link)
+                if isinstance(device, L3Device):
+                    device.ip = ("0.0.0.0", link.id)
+                    device._associateIPsToLinks() # Possibly in need of a lock
+
+        self._associateIPsToLinks()
+
+    def _associateIPsToLinks(self):
+        # Given self.links, associate each with the provided self.ips.
+        # If there are more links than IPs, each link gets associated
+        # with the default 0.0.0.0
+        
+        for i in range(len(self.links)):
+            try:
+                self.linkid_to_ip[self.links[i]] = self.ips[i]
+            except IndexError:
+                self.linkid_to_ip[self.links[i]] = "0.0.0.0"
+                self.ips.append("0.0.0.0")
+
+    @property
+    def ip(self):
+        # Return the first link's associated ip
+        try:
+            linkid = self.links[0].id # First link id
+            ip = self.linkid_to_ip[linkid]
+            return ip
+        except Exception as e:
+            print("---ERROR: ", e)
+            return None
+    
+    @ip.setter
+    def ip(self, val):
+        if isinstance(val, tuple): # self.ip = ("0.0.0.0", <LINKID>)
+            onlinkid = val[1]
+            self.linkid_to_ip[onlinkid] = val[0]
+        elif isinstance(val, str): # self.ip = "0.0.0.0"
+            onlinkid = self.links[0].id
+            self.linkid_to_ip[onlinkid] = val
+        else:
+            raise("Can't set IP to " + str(type(val)) )
+
+    ###### DHCP
+
+    # By default, a device has DHCP Client functionality
+    # And handles it as such
+
+    ## Send D(iscover) or R(equest)
+    def sendDHCP(self, context, onlink=None):
+        p, link = self.DHCPClient.sendDHCP(context)
+        self.send(p, link)
+    
+    def handleDHCP(self, data):
+        p, link = self.DHCPClient.handleDHCP(data)
+
+        # On DORA ACK, no packet is returned to send out
+        if p:
+            self.send(p, link)
+        else:
+            # Extract all of the goodies
             
-class Switch(Device):
-    def __init__(self, connectedTo=[], debug=1):
-        super().__init__([], connectedTo, debug)
+            self.nmask = "255.255.255.255"
+            self.gateway = "0.0.0.0"
+
+            if 1 in data["L3"]["Data"]["options"]:
+                self.nmask = data["L3"]["Data"]["options"][1]
+            if 3 in data["L3"]["Data"]["options"]:
+                self.gateway = data["L3"]["Data"]["options"][3]
+
+            self.ip = data["L3"]["Data"]["yiaddr"]
+            self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
+            self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
+            self.DHCP_FLAG = 2
+            self.current_xid = -1
+
+class Switch(L2Device):
+    def __init__(self, connectedTo=[], debug=1): # Switch
+        super().__init__(connectedTo, debug) # Switch
         self.id = "{S}" + str(random.randint(10000, 99999999))
         self.itm = {}
     
     def _checkTimeouts(self):
         pass
 
-    def handleARP(self, data):
-        self.handleAll(data)
-    
-    def handleDHCP(self, data):
-        self.handleAll(data)
-
-    def _associateIPsToLinks(self): # Yes, I should make a separate parent class, shut up
-        pass
-    
     # TODO: Dynamic ARP inspection for DHCP packets (DHCP snooping)
     def handleAll(self, data):
         # Before evaluating, add incoming data to ARP table
@@ -294,7 +359,7 @@ class Switch(Device):
                     # This is now handled in send()
                     self.send(data, link.id)
 
-class Host(Device):
+class Host(L3Device):
     def __init__(self, ips=[], connectedTo=[], debug=1):
         super().__init__(ips, connectedTo, debug)
         # L2
@@ -308,9 +373,6 @@ class Host(Device):
         self.lease_left = -1
         self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
         self.gateway = ""
-        
-        # On init, begin the DHCP DORA cycle to obtain an IP
-        self.sendDHCP("Init")
     
     def _checkTimeouts(self):
         # DHCP
@@ -322,36 +384,8 @@ class Host(Device):
                 self.DHCP_FLAG = 1
                 self.sendDHCP("Renew")
 
-    def handleDHCP(self, data):
-        p, link = self.DHCPClient.handleDHCP(data)
-
-        # On DORA ACK, no packet is returned to send out
-        if p:
-            self.send(p, link)
-        else:
-            # Extract all of the goodies
-            
-            self.nmask = "255.255.255.255"
-            self.gateway = "0.0.0.0"
-
-            if 1 in data["L3"]["Data"]["options"]:
-                self.nmask = data["L3"]["Data"]["options"][1]
-            if 3 in data["L3"]["Data"]["options"]:
-                self.gateway = data["L3"]["Data"]["options"][3]
-
-            self.ip = data["L3"]["Data"]["yiaddr"]
-            self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
-            self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-            self.DHCP_FLAG = 2
-            self.current_xid = -1
-
-    ## Send D(iscover) or R(equest)
-    def sendDHCP(self, context, onlink=None):
-        p, link = self.DHCPClient.sendDHCP(context)
-        self.send(p, link)
-
 ############################################################
-class Router(Device):
+class Router(L3Device):
     def __init__(self, ips, connectedTo=[], debug=1):
         super().__init__(ips, connectedTo, debug)
         self.id = "=R=" + str(random.randint(10000, 99999999))
@@ -359,18 +393,15 @@ class Router(Device):
     def _checkTimeouts(self):
         pass
         
-    def handleDHCP(self):
-        pass
-
 class Link:
     """ Connects two devices """
     def __init__(self, dl=[]):
         self.id = "[L]" + str(random.randint(10000, 99999999))
         self.dl = dl
 
-class DHCPServer(Device):
-    def __init__(self, ips, connectedTo, debug=1):
-        super().__init__(ips, connectedTo, debug)
+class DHCPServer(L3Device):
+    def __init__(self, ips, connectedTo, debug=1): # DHCPServer
+        super().__init__(ips, connectedTo, debug) # DHCPServer
         self.id = "=DHCP=" + str(random.randint(10000, 99999999))
         self.nmask = "255.255.255.0"
         print("DHCP IP INIT:", self.ips[0], self.ips)
@@ -405,4 +436,4 @@ if __name__ == "__main__":
     A = Host()
     S1 = Switch([A], debug=0)
     D = DHCPServer("10.10.10.1", [S1])
-    #A.sendDHCP("Init")
+    A.sendDHCP("Init")
