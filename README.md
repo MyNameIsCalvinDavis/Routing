@@ -34,21 +34,23 @@ Devices can then speak to each other as expected, via a dict representation of p
 }
 ```
 
-When we send() data, we don't send TO a host, rather we output on an interface. We then rely on the frame and other hardware to get it where it needs to go. Here, we send p on A's only interface.
+When we send() data, we don't send TO a host, rather we output on a link. We then rely on the frame and other hardware to get it where it needs to go. Importantly, the Interface class is mostly just a wrapper around a dictionary, representing a Device's Link:IP assocation, and is uninvolved in the send() process. This may change in the future.
+
+Here, we send p on A's only link.
 
 ```python
->>> A.send(p) # onlink param default value is self.interfaces[0]. Fine for a host with only one interface
+>>> A.send(p) # onlink param default value is self.links[0]. Fine for a host with only one interface
 ```
 
-We can also specify a specific interface, good for devices with several interfaces, like a Router or Switch:
+We can also specify a specific link, good for devices with several links, like a Router or Switch:
 
 ```python
->>> A.send(p, A.interfaces[0])
+>>> A.send(p, A.links[0])
 ```
 
 We can see the updated ARP caches of several of the devices, in the form of:
 ```
-<Device ID>:<Interface Link ID>
+<Device ID>:<Link ID>
 ```
 ```python
 >>> A.mti # MAC to Interface

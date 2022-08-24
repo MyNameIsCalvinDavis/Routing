@@ -20,7 +20,7 @@ import time
 
 # Not a Device, just deals with DHCP functionality
 # then returns output to the host / whatever it's inside of
-class DHCPServer:
+class DHCPServerHandler:
     def __init__(self, ip, nmask, haddr, DEBUG):
         self.ip = ip
         self.nmask = nmask
@@ -71,7 +71,8 @@ class DHCPServer:
                 return x
 
     def handleDHCP(self, data): # Send (O)ffer
-
+        
+        print("(DHCP) Server has IP", self.ip, "client has IP", data["L3"]["SIP"])
         # Process D(iscover) request
         if data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"]["options"][53] == 1:  
             # Send DHCP Offer
@@ -183,7 +184,9 @@ class DHCPServer:
         else:
             if self.DEBUG: print(self.id, "Ignoring")
 
-class DHCPClient:
+# Not a Device, just deals with DHCP functionality
+# then returns output to the host / whatever it's inside of
+class DHCPClientHandler:
     def __init__(self, haddr, interfaces, DEBUG):
 
         self.id = haddr

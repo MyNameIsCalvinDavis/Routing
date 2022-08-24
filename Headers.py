@@ -63,8 +63,8 @@ def makePacket_L3(sip, dip, data="", TTL=10, proto=None):
         "Version":4, # Make a new parameter if you love 6 so much, nerd
         "HLEN":0, # unimplemented until we care about fragmentation
         "TOS":0, # unused
-        "TotalLength":0
-        "ID":random.randint(0, 2^16), # fragmentation
+        "TotalLength":0,
+        "ID":random.randint(0, 2**16), # fragmentation
         "Flags":0, # fragmentation
         "FOffset":0,
         "TTL":TTL,

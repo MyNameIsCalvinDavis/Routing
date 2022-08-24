@@ -4,7 +4,7 @@ import threading
 from abc import ABC, abstractmethod
 import copy
 from Headers import *
-from DHCP import DHCPServer, DHCPClient
+from DHCP import DHCPServerHandler, DHCPClientHandler
 
 random.seed(123)
 
@@ -17,23 +17,28 @@ ARP resolves an IP to a MAC. So DHCP must run before anything else
 
 # Abstract Base Class
 class Device(ABC):
-
-
-    def __init__(self, connectedTo=[]):
+    def __init__(self, ips=[], connectedTo=[], debug=1):
 
         # Debug 0 : Show nothing
         # Debug 1 : Show who talks to who
         # Debug 2 : Show who sends what to who
-        self.DEBUG = 1
+        self.DEBUG = debug
 
         # For visualization purposes
         self.send_delay = 0.5
 
         self.id = "___" + str(random.randint(10000, 99999999))
-        self.interfaces = []
+        self.links = []
         self.buffer = []
         self.mti = {} # MAC to interface
         self.lock = threading.Lock()
+        
+        # Make ips always be a list, with ["0.0.0.0"] as default
+        if ips: self.ips = ips
+        else:   self.ips = ["0.0.0.0"]
+        if isinstance(self.ips, str): self.ips = [self.ips]
+
+        self.linkid_to_ip = {}
 
         self.thread_exit = False
         self._initConnections(connectedTo)
@@ -42,29 +47,62 @@ class Device(ABC):
         x = threading.Thread(target=self.listen, args=())
         x.start()
 
+    @property
+    def ip(self):
+        # Return the first link's associated ip
+        try:
+            linkid = self.links[0].id # First link id
+            ip = self.linkid_to_ip[linkid]
+            return ip
+        except Exception as e:
+            print("---ERROR: ", e)
+            return None
+    
+    @ip.setter
+    def ip(self, val):
+        if isinstance(val, tuple): # self.ip = ("0.0.0.0", <LINKID>)
+            onlinkid = val[1]
+            self.linkid_to_ip[onlinkid] = val[0]
 
-
+        elif isinstance(val, str): # self.ip = "0.0.0.0"
+            onlinkid = self.links[0].id
+            self.linkid_to_ip[onlinkid] = val
+        else:
+            raise("Can't set IP to " + str(type(val)) )
 
     def _initConnections(self, connectedTo):
         """
         Create a link between me and every device in connectedTo, and vice versa.
+        Upon forming a link, a device now has an interface and an IP
         """
         for device in connectedTo:
             link = Link([self, device])
-            if not link in self.interfaces:
-                self.interfaces.append(link)
-            if not link in device.interfaces:
-                device.interfaces.append(link)
+            if not link in self.links:
+                self.ip = ("0.0.0.0", link.id)
+                self.links.append(link)
+            if not link in device.links:
+                device.ip = ("0.0.0.0", link.id)
+                device.links.append(link)
+                device._associateIPsToLinks() # Possibly in need of a lock
+
+        self._associateIPsToLinks()
+
+    def _associateIPsToLinks(self):
+        # Given self.links, associate each with the provided self.ips
+        # len(ips) may be >= len(links), but not the other way around
+        
+        for i in range(len(self.links)):
+            self.linkid_to_ip[self.links[i]] = self.ips[i]
 
     def __str__(self):
         s = "\n" + self.id + "\n"
-        for item in self.interfaces:
+        for item in self.links:
             s += "  " + item.id + "\n"
             if isinstance(item, Link):
                 for sub_item in item.dl:
                     s += "    " + sub_item.id + "\n"
             else:
-                for sub_item in item.interfaces:
+                for sub_item in item.links:
                     s += "    " + sub_item.id + "\n"
             
         return s 
@@ -85,7 +123,7 @@ class Device(ABC):
         assert isinstance(data, dict)
         if onlink: assert isinstance(onlink, str)
         if onlink == None:
-            onlink = self.interfaces[0].id
+            onlink = self.links[0].id
         
         # Is data in the right format?
         for k, v in data.items():
@@ -141,7 +179,7 @@ class Device(ABC):
         print(self.DEBUG)
         if self.DEBUG: print(self.id, "sending ARP request to", targetID)
         if onlinkID == None:
-            onlinkID = self.interfaces[0].id
+            onlinkID = self.links[0].id
         elif not isinstance(onlinkID, str):
             raise ValueError("onlinkID must be of type <str>")
 
@@ -186,11 +224,11 @@ class Device(ABC):
         if not isinstance(ID, str): raise ValueError("ID must be of type <str>")
 
         # First, check to see if that link is on this devices interfaces at all
-        ids = [x.id for x in self.interfaces]
+        ids = [x.id for x in self.links]
         if not ID in ids:
             raise ValueError("LinkID " + ID + " not located in " + self.id + " interfaces")
 
-        for link in self.interfaces:
+        for link in self.links:
             if link.id == ID:
                 return link
 
@@ -205,15 +243,17 @@ class Device(ABC):
     @abstractmethod   
     def _checkTimeouts(self):
         raise NotImplementedError("Must override this method in the child class")
-        
+    
+    # We provide a way to handle DHCP requests if desired,
+    # otherwise just do nothing with this method in any children
     @abstractmethod
     def handleDHCP(self):
         raise NotImplementedError("Must override this method in the child class")
 
             
 class Switch(Device):
-    def __init__(self, connectedTo=[]):
-        super().__init__(connectedTo)
+    def __init__(self, connectedTo=[], debug=1):
+        super().__init__([], connectedTo, debug)
         self.id = "{S}" + str(random.randint(10000, 99999999))
         self.itm = {}
     
@@ -225,8 +265,10 @@ class Switch(Device):
     
     def handleDHCP(self, data):
         self.handleAll(data)
-    
 
+    def _associateIPsToLinks(self): # Yes, I should make a separate parent class, shut up
+        pass
+    
     # TODO: Dynamic ARP inspection for DHCP packets (DHCP snooping)
     def handleAll(self, data):
         # Before evaluating, add incoming data to ARP table
@@ -245,7 +287,7 @@ class Switch(Device):
 
         else: # Flood every interface with the request
             if self.DEBUG: print(self.id, "flooding")
-            for link in self.interfaces:
+            for link in self.links:
                 if link.id != data["L2"]["FromLink"]: # Dont send back on the same link
                     # Python shenanigans: Make sure to flood with a *copy*
                     # and not a reference to the same data dictionary
@@ -253,14 +295,13 @@ class Switch(Device):
                     self.send(data, link.id)
 
 class Host(Device):
-    def __init__(self, connectedTo=[]):
-        super().__init__(connectedTo)
+    def __init__(self, ips=[], connectedTo=[], debug=1):
+        super().__init__(ips, connectedTo, debug)
         # L2
         self.id = "-H-" + str(random.randint(10000, 99999999))
 
         # L3
-        self.DHCPClient = DHCPClient(self.id, self.interfaces, self.DEBUG)
-        self.ip = ""
+        self.DHCPClient = DHCPClientHandler(self.id, self.links, self.DEBUG)
         self.nmask = ""
         self.gateway = ""
         self.lease = (-1, -1) # (leaseTime, time (s) received the lease)
@@ -269,7 +310,7 @@ class Host(Device):
         self.gateway = ""
         
         # On init, begin the DHCP DORA cycle to obtain an IP
-        #self.sendDHCP("Init")
+        self.sendDHCP("Init")
     
     def _checkTimeouts(self):
         # DHCP
@@ -310,23 +351,36 @@ class Host(Device):
         self.send(p, link)
 
 ############################################################
-# Also a DHCP server
 class Router(Device):
-    def __init__(self, connectedTo=[]):
-        super().__init__(connectedTo)
+    def __init__(self, ips, connectedTo=[], debug=1):
+        super().__init__(ips, connectedTo, debug)
         self.id = "=R=" + str(random.randint(10000, 99999999))
-        
-        # DHCP Server
-        self.ip = "10.10.10.1"
-        self.nmask = "255.255.255.0"
-    
-        self.DHCPServer = DHCPServer(self.ip, self.nmask, self.id, self.DEBUG)
 
+    def _checkTimeouts(self):
+        pass
+        
+    def handleDHCP(self):
+        pass
+
+class Link:
+    """ Connects two devices """
+    def __init__(self, dl=[]):
+        self.id = "[L]" + str(random.randint(10000, 99999999))
+        self.dl = dl
+
+class DHCPServer(Device):
+    def __init__(self, ips, connectedTo, debug=1):
+        super().__init__(ips, connectedTo, debug)
+        self.id = "=DHCP=" + str(random.randint(10000, 99999999))
+        self.nmask = "255.255.255.0"
+        print("DHCP IP INIT:", self.ips[0], self.ips)
+        self.DHCPServerHandler = DHCPServerHandler(self.ips[0], self.nmask, self.id, self.DEBUG)
+        
     def _checkTimeouts(self):
         # DHCP lease expiry check
         # IP: (chaddr, lease_offer, lease_give_time)
         del_ips = []
-        for k, v in self.DHCPServer.leased_ips.items():
+        for k, v in self.DHCPServerHandler.leased_ips.items():
             time_left = (v[2] + v[1]) - int(time.time())
             if time_left <= 0:
                 # For now, just delete the entry. TODO: Clean up entry deletion procedure per RFC
@@ -335,30 +389,20 @@ class Router(Device):
 
         # Then, actually delete it
         if del_ips:
-            for key in del_ips: del self.DHCPServer.leased_ips[k]
+            for key in del_ips: del self.DHCPServerHandler.leased_ips[k]
             if self.DEBUG: print("(DHCP)", self.id, "deleted entries from lease table")
 
-        
-
-    def handleDHCP(self, data): # O of DORA
-        response, link = self.DHCPServer.handleDHCP(data)
+    def handleDHCP(self, data):
+        response, link = self.DHCPServerHandler.handleDHCP(data)
         self.send(response, link)
-        
-class Link:
-    """ Connects two devices """
-    def __init__(self, dl=[]):
-        self.id = "[L]" + str(random.randint(10000, 99999999))
-        self.dl = dl
 
 if __name__ == "__main__":
 
-    A, B, C = Host(), Host(), Host()
-    R1 = Router()
-    S1 = Switch([A, R1])
-    S1.DEBUG = 0
+    #A, B, C = Host(), Host(), Host()
+    #S1 = Switch([A])
+    #R1 = Router(["10.10.10.1"])
     
-    print(A, B, C, R1)
-    print(S1)
-
-    A.sendDHCP("Init")
-    #A.sendARP(B.id)
+    A = Host()
+    S1 = Switch([A], debug=0)
+    D = DHCPServer("10.10.10.1", [S1])
+    #A.sendDHCP("Init")
