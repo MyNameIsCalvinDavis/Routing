@@ -24,12 +24,19 @@ def mergeDicts(x, y):
     
     return x
 
-def genericIgnoreMessage(self, inproto, fr=None):
+def genericIgnoreMessage(inproto, ID, fr=None):
     s = ""
     if fr: s = "from " + fr
-    print("("+inproto+")", self.id, "ignoring data", s)
+    print("("+inproto+")", ID, "ignoring data", s)
+
+
 
 def makePacket(L2="", L3="", L4="", L5="", L6="", L7=""):
+    """
+    The standard packet format used in this project. Each entry
+    represents an OSI layer, which has its own packing function
+    elsewhere in this file.
+    """
     
     d = {
         "L2":L2,
@@ -46,7 +53,6 @@ def makePacket(L2="", L3="", L4="", L5="", L6="", L7=""):
 
     return d
 
-# Called a packet & not a frame for consistency's sake
 # An ethernet frame
 def makePacket_L2(ethertype="", fr="", to="", fromlink="", data=""):
     return {
@@ -78,6 +84,7 @@ def makePacket_L3(sip, dip, data="", TTL=10, proto=None):
         "Data":data
     }
 
+# UDP
 def makePacket_L4_UDP(sp="", dp="", data="", length="", checksum=""):
     return {
         "SPort":sp,

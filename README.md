@@ -4,10 +4,9 @@ The purpose of this project is to provide a network simulation framework up to L
  - Device (Abstract Base Class)
  - Switch
  - Host
-   - DHCP Client
  - Router
-   - DHCP Server
  - Link
+ - DHCP Client / Server
 
 In our simulation, we are able to connect a topology together in an intuitive way. Here we form a basic 4 device LAN:
 

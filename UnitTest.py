@@ -38,10 +38,18 @@ class SwitchTestCase(unittest.TestCase):
     # Connect a switch to various stuff in various ways
     def test_SwitchInit(self):
         # Does init work?
-        S1 = Switch()
-        S2 = Switch()
-        kill(S1, S2)
 
+        S1 = Switch()
+        S2 = Switch([S1])
+        
+        for link in S1.links:
+            if not "[L]" in link.id:
+                self.fail("Switch links contain a non-link")
+
+        self.assertEqual( len(S1.links), 1)
+        self.assertEqual( len(S2.links), 1)
+        kill(S1, S2)
+    
     def test_Connection_01(self):
         # 1 Connect a switch to something with no links
         # 2 Connect a switch to something with links
@@ -73,9 +81,11 @@ class HostTestCase(unittest.TestCase):
         """
         H --- S --- R
         """
+
         self.A = Host()
         self.R1 = Router("10.10.10.1")
         self.S1 = Switch([self.A, self.R1])
+
         config(self.A, self.R1, self.S1)
         self.output = io.StringIO()
 
@@ -83,6 +93,7 @@ class HostTestCase(unittest.TestCase):
         kill(self.A, self.R1, self.S1)
         
     def test_sendRecvARP(self):
+
         # Send an ARP request to R1 from A, check response
         expected = "(ARP) " + self.A.id + " got ARP Response, updating ARP cache"
 
@@ -95,6 +106,9 @@ class HostTestCase(unittest.TestCase):
                     break
                 time.sleep(0.1)
             else:
+                err("\n\n++++++++++\nOutput:")
+                err(self.output.getvalue())
+                err("++++++++++++++++")
                 self.fail("SendRectARP failed")
 
     def test_recvSendARP(self):
