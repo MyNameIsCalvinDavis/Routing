@@ -6,8 +6,9 @@ DHCP
 ARP
 """
 
-MAC_BROADCAST="FFFF"
-random.seed(123)
+MAC_BROADCAST = "FFFF"
+IP_BROADCAST = "255.255.255.255"
+#random.seed(123)
 
 def mergeDicts(x, y):
     """
@@ -64,7 +65,9 @@ def makePacket_L2(ethertype="", fr="", to="", fromlink="", data=""):
     }
 
 # an IP packet
-def makePacket_L3(sip, dip, data="", TTL=10, proto=None):
+def makePacket_L3(sip, dip, data="", proto=None, TTL=10 ):
+    if data: assert isinstance(data, dict)
+    if proto: assert isinstance(proto, str)
     return {
         "Version":4, # Make a new parameter if you love 6 so much, nerd
         "HLEN":0, # unimplemented until we care about fragmentation
@@ -140,9 +143,13 @@ options             DORA uses message 53, which is all we will use. This field w
 # https://www.netmanias.com/en/post/techdocs/5998/dhcp-network-protocol/understanding-the-basic-operations-of-dhcp
 # https://avocado89.medium.com/dhcp-packet-analysis-c84827e162f0
 def createDHCPHeader(op=1, htype=1, hardwareaddrlen=6,
-                     hops=-1, xid=random.randint(1000000000, 9999999999),
+                     hops=-1, xid=None,
                      seconds=0, flags=1, ciaddr="0.0.0.0", yiaddr="0.0.0.0",
                      siaddr="0.0.0.0",giaddr="0.0.0.0", chaddr="", options={}):
+    
+    if not xid:
+        xid = random.randint(1000000000, 9999999999)
+
 
     d = {
         "op":op,
@@ -166,3 +173,34 @@ def createDHCPHeader(op=1, htype=1, hardwareaddrlen=6,
     #    d[option_name] = option_value
 
     return d
+
+"""
+ICMP RFC 792
+ 0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Type      |     Code      |          Checksum             |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |           Identifier          |        Sequence Number        |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Data ...
+   +-+-+-+-+-
+Type                8 (Echo Request) or 0 (Echo Reply)
+Code                0
+Checksum            Checksum
+Identifier          Code to aid in matching echos and replies
+Seq Number          Same as Identifier? TODO
+"""
+def createICMPHeader(typ, code=0, identifier=random.randint(0, 999999),
+                     snum=random.randint(0, 999999)): # Only echo requests / replies, we ignore the rest
+    """
+    To form an echo reply message, the source and destination
+    addresses are simply reversed, the type code changed to 0,
+    and the checksum recomputed.
+    """
+    d = {
+        "type":typ,
+        "code":code,
+        "identifier":identifier,
+        "SNum":snum,
+    }

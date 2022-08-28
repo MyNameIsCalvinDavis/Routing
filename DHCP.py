@@ -116,15 +116,17 @@ class DHCPServerHandler:
             }
 
             options = mergeDicts(requested_options, server_options)
+            print("DHCP Server opts sending:", options)
 
             # Broadcast (flags=0) a response (op=2) # TODO: Verify with table 4.3.1$3
             DHCP = createDHCPHeader(op=2, 
                     chaddr=data["L3"]["Data"]["chaddr"],
                     yiaddr=clientip,
-                    options=options
+                    options=options,
+                    xid=data["L3"]["Data"]["xid"]
                 )
             p4 = makePacket_L4_UDP(67, 68)
-            p3 = makePacket_L3(self.ip, "255.255.255.255", DHCP)
+            p3 = makePacket_L3(self.ip, "255.255.255.255", DHCP, "UDP")
             
             # Check if the client wants the message broadcast or unicast
             p2 = makePacket_L2("IPv4", 
@@ -168,11 +170,12 @@ class DHCPServerHandler:
             DHCP = createDHCPHeader(op=2, 
                     chaddr=data["L3"]["Data"]["chaddr"],
                     yiaddr=yiaddr,
-                    options=options
+                    options=options,
+                    xid=data["L3"]["Data"]["xid"]
                 )
 
             p4 = makePacket_L4_UDP(67, 68)
-            p3 = makePacket_L3(self.ip, "255.255.255.255", DHCP)
+            p3 = makePacket_L3(self.ip, "255.255.255.255", DHCP, "UDP")
 
             # Check if the client wants the message broadcast or unicast
             p2 = makePacket_L2("IPv4", 
@@ -237,6 +240,10 @@ class DHCPClientHandler:
         :returns: The linkID it should be sent out on, str
         """
         ######
+
+        #if data["L3"]["Data"]["xid"] != self.current_tx:
+        #    return None, None
+
         if self.DEBUG == 2: print("(DHCP)", self.id, "got", data)
 
         # Process O(ffer)
@@ -259,10 +266,10 @@ class DHCPClientHandler:
                 55: self.requested_options # Same as before
             }
 
-            DHCP = createDHCPHeader(chaddr=self.id, flags=1, options=options)
+            DHCP = createDHCPHeader(chaddr=self.id, flags=1, options=options, xid=data["L3"]["Data"]["xid"])
 
             p4 = makePacket_L4_UDP(68, 67)
-            p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP)
+            p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP, "UDP")
             p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST)
             p = makePacket(p2, p3, p4)
             
@@ -282,7 +289,7 @@ class DHCPClientHandler:
             self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
             self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
             self.DHCP_FLAG = 2
-            self.current_xid = -1
+            #self.current_xid = -1
             if self.DEBUG: print("(DHCP)", self.id, "received DHCP ACK from", data["L2"]["From"]+".", "New IP:", self.ip)
         else:
             if self.DEBUG: genericIgnoreMessage("DHCP", data["L2"]["From"])
@@ -304,7 +311,7 @@ class DHCPClientHandler:
             onLink = self.interfaces[0].id
         
         # Send D(iscover)
-        if context == "Init": 
+        if context.lower() == "init": 
             print("(DHCP)", self.id, "sending DHCP Discover")
             
             # RFC2131 S4.4.1 Table 5
@@ -318,7 +325,7 @@ class DHCPClientHandler:
             DHCP = createDHCPHeader(chaddr=self.id, options=options)
             
             p4 = makePacket_L4_UDP(68, 67)
-            p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP) # MAC included
+            p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP, "UDP") # MAC included
             p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, onLinkID)
             p = makePacket(p2, p3, p4)
 
@@ -326,7 +333,7 @@ class DHCPClientHandler:
             return p, onLinkID
         
         # Send R(equest) renewal
-        if context == "Renew":
+        if context.lower() == "Renew":
             print("(DHCP)", self.id, "sending DHCP Request (Renewal)")
 
             # RFC2131 S4.4.1 Table 5
@@ -342,7 +349,7 @@ class DHCPClientHandler:
 
             # Now that the IP is active, unicast to DHCP server
             p4 = makePacket_L4_UDP(68, 67)
-            p3 = makePacket_L3(self.ip, self.DHCP_IP, DHCP)
+            p3 = makePacket_L3(self.ip, self.DHCP_IP, DHCP, "UDP")
             p2 = makePacket_L2("IPv4", self.id, self.DHCP_MAC)
             p = makePacket(p2, p3, p4)
 

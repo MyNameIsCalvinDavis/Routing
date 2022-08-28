@@ -1,11 +1,13 @@
 import random
 import time
 import threading
+import asyncio
 from abc import ABC, abstractmethod
 import copy
 from Headers import *
 from DHCP import DHCPServerHandler, DHCPClientHandler
 from ARP import ARPHandler
+import pprint
 
 random.seed(123)
 
@@ -47,9 +49,13 @@ class Device(ABC):
 
         # ARP
         self.ARPHandler = ARPHandler(self.id, self.links, self.DEBUG)
+        
+        def async_listen_start():
+            asyncio.run(self.listen())
 
         # Start the listening thread on this device
-        self.lthread = threading.Thread(target=self.listen, args=())
+        #self.lthread = threading.Thread(target=self.listen, args=())
+        self.lthread = threading.Thread(target=async_listen_start, args=())
         self.lthread.start()
     
     def __del__(self):
@@ -57,10 +63,11 @@ class Device(ABC):
         # Without leveraging multiprocessing or pkill, we can't kill it directly (unsafely)
         self.thread_exit = True
     
-    def listen(self):
+    async def listen(self):
         while True:
             if self.thread_exit: return
-            time.sleep(self.listen_delay)
+            #time.sleep(self.listen_delay)
+            await asyncio.sleep(self.listen_delay)
             self._checkTimeouts()
             if self.buffer:
                 data = self.buffer.pop(0)
@@ -69,17 +76,11 @@ class Device(ABC):
                 if self.DEBUG == 2:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
                 
-                self.handleData(data)
-    #@abstractmethod
-    #def listen(self):
-    #    """
-    #    Executed by self.lthread, should be querying self.buffer and directing the
-    #    data to wherever it should go based on its contents
-    #    """
-    #    raise NotImplementedError("Must override this method in the child class")
+                #self.handleData(data)
+                await self.handleData(data)
     
     @abstractmethod
-    def handleData(self, data):
+    async def handleData(self, data):
         raise NotImplementedError("Must override this method in the child class")
 
     @abstractmethod
@@ -114,20 +115,20 @@ class Device(ABC):
             
         return s 
     
-    def sendARP(self, targetID, onLinkID=None):
+    async def sendARP(self, targetIP, onLinkID=None):
         """
         Send an ARP request to another device on the same subnet
         
         :param targetID: id parameter of target device
         :param onLinkID: optional, id parameter of link to be send out on
         """
-        assert isinstance(targetID, str)
+        assert isinstance(targetIP, str)
         if onLinkID: assert isinstance(onLinkID, str)
 
         p, link = self.ARPHandler.sendARP(targetID, onLinkID)
         self.send(p, link)
 
-    def handleARP(self, data):
+    async def handleARP(self, data):
         """
         Handle incoming ARP data
 
@@ -248,6 +249,11 @@ class L2Device(Device):
                     device._associateIPsToLinks() # Possibly in need of a lock
 
 
+
+"""
+TODO: A static IP host doesn't know where the gateway is
+
+"""
 class L3Device(Device):
     def __init__(self, ips=[], connectedTo=[], debug=1, ID=None): # L3Device
         """
@@ -266,24 +272,121 @@ class L3Device(Device):
         if isinstance(self.ips, str): self.ips = [self.ips]
 
         super().__init__(connectedTo, debug, ID) # L3Device
-    
-    def handleData(self, data):
+        
+        # Give this handler the ability to ask for an interface's IP
+        self.ARPHandler = ARPHandler(self.id, self.links, self.DEBUG, ipfunc=self.getIP)
+        
+    async def handleData(self, data):
         """
         Handle data as a L3 device would. All this does is read the L2/L3 information
         and forward the data to the correct handler, depending on port / ethertype / etc
         
         :param data: See `Headers.makePacket()`, dict
         """
-        if data["L2"]["EtherType"] == "ARP":
-            self.handleARP(data)
-        elif data["L2"]["EtherType"] == "IPv4":
-            # Handle L4 stuff
-            if data["L4"]["DPort"] in [67, 68]: # DHCP
-                self.handleDHCP(data)
-            else:
-                if self.DEBUG: print("(Error)", self.id, "not configured for port", data["L4"]["DPort"])
+    
+        if data["L2"]["To"] not in [self.id, MAC_BROADCAST]: # L2 destination check
+            print(self.id, "got L2 frame, ignoring")
+            return
+
+        if data["L2"]["EtherType"] == "ARP": # L2 multiplexing
+            #self.handleARP(data)
+            await self.handleARP(data)
+
+        elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
+            
+            #if data["L3"]["DIP"] != self.getIP() and data["L3"]["DIP"] != IP_BROADCAST: # L3 destination check
+            if data["L3"]["DIP"] not in [self.getIP(), IP_BROADCAST]:
+                print(self.id, ":", self.getIP(), "req:", data["L3"]["DIP"])
+                print(self.id, "got L3 packet, ignoring")
+                return
+
+            #https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
+            if data["L3"]["Protocol"] == "UDP": # 17
+                # Handle UDP protocols
+
+                # DHCP
+                if data["L4"]["DPort"] in [67, 68]: # L4 multiplexing
+                    #self.handleDHCP(data)
+                    self.handleDHCP(data)
+                # elif...
+                # elif...
+                # elif...
+                else:
+                    if self.DEBUG: print("(Error)", self.id, "not configured for port", data["L4"]["DPort"])
+            
+            elif data["L3"]["Protocol"] == "ICMP": # 1
+                #self.handleICMP(data)
+                await self.handleICMP(data)
         else:
             print(self.id, "ignoring", data["L2"]["From"], data)
+    
+    
+
+    def _checkTimeouts(self):
+        pass
+
+    async def sendICMP(self, targetIP, onlinkID=None):
+        """
+        After DHCP, gateway IP is known
+        Send an ARP looking for gateway's MAC, if not held
+        R responds, now we have their MAC
+        Create packet: L2, L3
+        Send it
+        Router receives it in handleICMP
+            Is this to me (L2): yes
+            Is the destination subnet in my routing table
+                Yes: send it on that interface
+                No: Send to default gateway
+                Else: Drop packet
+
+        Router sends to H2
+        Packet is addressed to H2 over L3, not L2
+
+        """
+        print(self.id, "ICMP init")
+        if not onlinkID:
+            onlinkID = self.interfaces[0].id
+        
+        try: self.gateway
+        except:
+            print(self.id, "DHCP not configured")
+
+        print(self.id, "gateway:", self.gateway)
+        # At this point, device knows gateway IP
+        # Let's find its MAC
+        print(self.id, "async sleep time")
+        print(self.id, self.ARPHandler.mti)
+        asyncio.sleep(4)
+        print(self.id, self.ARPHandler.mti)
+        
+        
+        # Given an IP:
+        # If the IP is in our network:
+            # Obtain the IP's MAC address via ARP
+                # Send ARP, then set some flag
+                # In checktimeouts, check this flags timeout (5s?)
+            # Once a MAC has been obtained, send an ICMP packet to that MAC
+            # If no MAC, assume failure. Retransmit?
+        # If not:
+            # Create the ICMP packet and send it to the gateway
+            # ARP the gateway, send to gateway
+
+
+        #p3 = makePacket_L3(self.getIP(), data["L3"]["SIP"], proto="ICMP")
+        #p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST)
+        #p = makePacket(p2, p3, p4)
+        #self.send(p, onlinkID)
+        
+    def handleICMP(self, data):
+        # Receive an ICMP packet
+        # For now, just fire it back
+        
+        return
+        #p3 = makePacket_L3(self.data["L3"]["DIP"], data["L3"]["SIP"], proto="ICMP")
+        #p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST)
+        #p = makePacket(p2, p3, p4)
+
+        #self.send(p, data["L2"]["FromLink"]
 
 
     def _initConnections(self, connectedTo):
@@ -345,23 +448,6 @@ class L3Device(Device):
         if not linkID: linkID = self.links[0].id
         self.linkid_to_ip[linkID] = val
 
-    #@ip.setter
-    #def ip(self, val):
-    #    """
-    #    Set the ip of this Device. When set to a single string, it updates the first link's
-    #    associated ip. When set to a tuple in the form of (<IP>, <LINKID>), it updates
-    #    the linkid_to_ip dictionary for that linkID.
-
-    #    :param val: Whatever ip is being set to, str, tup(str, str)
-    #    """
-    #    if isinstance(val, tuple): # self.ip = ("0.0.0.0", <LINKID>)
-    #        onlinkid = val[1]
-    #        self.linkid_to_ip[onlinkid] = val[0]
-    #    elif isinstance(val, str): # self.ip = "0.0.0.0"
-    #        onlinkid = self.links[0].id
-    #        self.linkid_to_ip[onlinkid] = val
-    #    else:
-    #        raise("Can't set IP to " + str(type(val)) )
     
     ###### DHCP
 
@@ -370,16 +456,18 @@ class L3Device(Device):
     ## Send D(iscover) or R(equest)
     def sendDHCP(self, context, onlink=None):
         p, link = self.DHCPClient.sendDHCP(context)
+        print("===", self.id, "using tx", p["L3"]["Data"]["xid"])
         self.send(p, link)
     
     def handleDHCP(self, data):
         p, link = self.DHCPClient.handleDHCP(data)
 
         # On DORA ACK, no packet is returned to send out
-        if p: self.send(p, link)
+        if p: 
+            self.send(p, link)
         else:
             # Extract all of the goodies
-            
+            print(self.id, "got ACK?", data)
             self.nmask = "255.255.255.255"
             self.gateway = "0.0.0.0"
 
@@ -400,20 +488,20 @@ class Switch(L2Device):
     def __init__(self, connectedTo=[], debug=1): # Switch
         self.id = "{S}" + str(random.randint(10000, 99999999))
         super().__init__(connectedTo, debug, self.id) # Switch
-        self.itm = {}
 
     def _checkTimeouts(self):
         pass
 
     # TODO: Dynamic ARP inspection for DHCP packets (DHCP snooping)
-    def handleData(self, data):
-        # Before evaluating, add incoming data to ARP table
-        self.ARPHandler.mti[data["L2"]["From"]] = data["L2"]["FromLink"]
-        self.itm[data["L2"]["FromLink"]] = data["L2"]["From"]
-        if self.DEBUG == 1: print(self.id, "Updated ARP table:", self.ARPHandler.mti)
+    async def handleData(self, data):
+        # Before evaluating, add incoming data to switch table
+        self.ARPHandler.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
+
+        #self.itm[data["L2"]["FromLink"]] = data["L2"]["From"]
+        #if self.DEBUG == 1: print(self.id, "Updated ARP table:", self.ARPHandler.mti)
         
         # ARP table lookup
-        if data["L2"]["To"] in self.ARPHandler.mti:
+        if data["L2"]["To"] in self.ARPHandler.switch_table:
             if self.DEBUG: print(self.id, "Found", data["L2"]["To"], "in ARP table")
             # Grab the link ID associated with the TO field (in the ARP table),
             # then get the link object from that ID
@@ -447,7 +535,21 @@ class Host(L3Device):
             if self.lease_left <= 0.5 * self.lease[0] and self.DHCP_FLAG != 1:
                 if self.DEBUG: print("(DHCP)", self.id, "renewing ip", self.getIP())
                 self.DHCP_FLAG = 1
+                print("(DHCP)", self.id, "renewing IP", self.getIP())
                 self.sendDHCP("Renew")
+                
+    def handleDHCP(self, data):
+        # A host will only respond to its transaction
+        if data["L3"]["Data"]["xid"] == self.DHCPClient.current_tx:
+            #print("===", self.id, "responding to", data["L2"]["From"], "\n",\
+            #    "==My TX:", self.DHCPClient.current_tx, "incoming:", data["L3"]["Data"]["xid"])
+            super().handleDHCP(data)
+        else:
+            
+            #print("-----", self.id, "ignoring DHCP from", data["L2"]["From"], "\n",\
+            #    "==My TX:", self.DHCPClient.current_tx, "incoming:", data["L3"]["Data"]["xid"])
+            #print("-----", self.id, "ignoring DHCP from", data["L2"]["From"])
+            if DEBUG: print(self.id, "ignoring DHCP from", data["L2"]["From"])
 
 ############################################################
 class Router(L3Device):
@@ -465,7 +567,7 @@ class Link:
         self.dl = dl
 
 class DHCPServer(L3Device):
-    def __init__(self, ips, connectedTo, debug=1): # DHCPServer
+    def __init__(self, ips, connectedTo=[], debug=1): # DHCPServer
         self.id = "=DHCP=" + str(random.randint(10000, 99999999))
         super().__init__(ips, connectedTo, debug, self.id) # DHCPServer
 
@@ -490,6 +592,7 @@ class DHCPServer(L3Device):
             if self.DEBUG: print("(DHCP)", self.id, "deleted entries from lease table")
 
     def handleDHCP(self, data):
+        print(self.id, "got DHCP from", data["L2"]["From"])
         response, link = self.DHCPServerHandler.handleDHCP(data)
         self.send(response, link)
 
@@ -503,7 +606,21 @@ if __name__ == "__main__":
     #S1 = Switch([A, R1])
     #A.sendARP(R1.id)
     
+    #A = Host()
+    #S1 = Switch([A], debug=0)
+    #D = DHCPServer("10.10.10.1", [S1])
+    #A.sendDHCP("Init")
+
     A = Host()
-    S1 = Switch([A], debug=0)
-    D = DHCPServer("10.10.10.1", [S1])
-    A.sendDHCP("Init")
+    B = Host()
+    D1 = DHCPServer("1.1.1.2")
+    S1 = Switch([A, B, D1], debug=0)
+
+    A.sendDHCP("init")
+    time.sleep(1)
+    B.sendDHCP("init")
+
+
+
+
+
