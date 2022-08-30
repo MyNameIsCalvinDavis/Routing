@@ -1,7 +1,26 @@
 import random
 import time
 import threading
+
 import asyncio
+"""
+Asyncio is being used to simulate sent packet timeouts. I could home
+bake this functionality without coroutines by having various flags
+and some framework or tuple format be respected, but that's another
+format on top of all the other ones here, and I'd rather not make myself
+and anyone else who uses this memorize or understand such a format.
+
+Instead we go with coroutines, where a timeout is sending out
+a packet and calling `await asyncio.sleep(n)` with n being the max
+timeout. If the data exists / was changed, we consider
+the send() a success, otherwise we consider the packet lost and
+retransmit / etc. I'm not yet sure how this will work with
+something like a TCP connection or a stream, if I get that far.
+
+This ends up being a lot less code in the long run and is something I
+can wrap with a more user friendly timeout framework later
+"""
+
 from abc import ABC, abstractmethod
 import copy
 from Headers import *
@@ -41,7 +60,15 @@ class Device(ABC):
         if ID: self.id = ID
         else: self.id = "___" + str(random.randint(10000, 99999999))
         self.links = []
-        self.buffer = []
+
+        # To be used as a recipient for send(), read by listen()
+        self.listen_buffer = []
+
+        # To be used as an immutable history of all received data on this device
+        self.received_data = ()
+
+        self._events = set()
+
         self.lock = threading.Lock()
 
         self.thread_exit = False
@@ -57,6 +84,24 @@ class Device(ABC):
         #self.lthread = threading.Thread(target=self.listen, args=())
         self.lthread = threading.Thread(target=async_listen_start, args=())
         self.lthread.start()
+
+    def fireEvent(self, *args):
+        # Events are fired when things happen, whatever they may be.
+        # We let the user define events arbitrarily, without a specific format,
+        # such that they may create and listen for their own events
+        
+        if args in self._events:
+            raise ValueError("Cannot add duplicate event, " + str(args) + " already in events")
+        else:
+            self._events.add(args)
+
+    def deleteEvent(self, *args):
+        self._events.remove(args)
+
+    def checkEvent(self, *args):
+        if args in self._events:
+            return True
+        return False
     
     def __del__(self):
         # If this object falls out of scope, safely terminate the running thread
@@ -68,15 +113,16 @@ class Device(ABC):
             if self.thread_exit: return
             #time.sleep(self.listen_delay)
             await asyncio.sleep(self.listen_delay)
-            self._checkTimeouts()
-            if self.buffer:
-                data = self.buffer.pop(0)
+            await self._checkTimeouts()
+            if self.listen_buffer:
+                data = self.listen_buffer.pop(0)
                 if self.DEBUG == 1:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
                 if self.DEBUG == 2:
                     print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
                 
                 #self.handleData(data)
+                print("--", self.id, "handling data")
                 await self.handleData(data)
     
     @abstractmethod
@@ -95,7 +141,7 @@ class Device(ABC):
     
     # Some L2 devices won't have timeouts; too bad
     @abstractmethod   
-    def _checkTimeouts(self):
+    async def _checkTimeouts(self):
         """
         Should be executed periodically either by listen() or some other non-main thread,
         can be empty if a device has no periodic checks to make, but must be implemented.
@@ -136,6 +182,9 @@ class Device(ABC):
         """
         p, link = self.ARPHandler.handleARP(data)
         if p: self.send(p, link)
+        else:
+            # Fire an event
+            self.fireEvent("ARPRESPONSE")
 
     def send(self, data, onlinkID=None):
         #print("    ", self.id, "sending to", onlinkID)
@@ -178,7 +227,7 @@ class Device(ABC):
         if self.DEBUG == 2: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"] + "\n    " + str(data))
 
         self.lock.acquire()
-        end.buffer.append(data)
+        end.listen_buffer.append(data)
         self.lock.release()
 
     def getOtherDeviceOnInterface(self, onlinkID):
@@ -283,29 +332,35 @@ class L3Device(Device):
         
         :param data: See `Headers.makePacket()`, dict
         """
-    
+        print(self.id, "got", data)
         if data["L2"]["To"] not in [self.id, MAC_BROADCAST]: # L2 destination check
             print(self.id, "got L2 frame, ignoring")
             return
 
+        print(self.id, "A")
         if data["L2"]["EtherType"] == "ARP": # L2 multiplexing
             #self.handleARP(data)
             await self.handleARP(data)
-
+        
         elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
             
+            print(self.id, "B")
             #if data["L3"]["DIP"] != self.getIP() and data["L3"]["DIP"] != IP_BROADCAST: # L3 destination check
             if data["L3"]["DIP"] not in [self.getIP(), IP_BROADCAST]:
-                print(self.id, ":", self.getIP(), "req:", data["L3"]["DIP"])
-                print(self.id, "got L3 packet, ignoring")
+                #print(self.id, ":", self.getIP(), "req:", data["L3"]["DIP"])
+                #print(self.id, "got L3 packet, ignoring")
                 return
 
+            print(self.id, "C")
             #https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
             if data["L3"]["Protocol"] == "UDP": # 17
+
+                print(self.id, "D")
                 # Handle UDP protocols
 
                 # DHCP
                 if data["L4"]["DPort"] in [67, 68]: # L4 multiplexing
+                    print(self.id, "handling DHCP")
                     #self.handleDHCP(data)
                     self.handleDHCP(data)
                 # elif...
@@ -319,11 +374,12 @@ class L3Device(Device):
                 await self.handleICMP(data)
         else:
             print(self.id, "ignoring", data["L2"]["From"], data)
-    
+        
+        return
     
 
-    def _checkTimeouts(self):
-        pass
+    async def _checkTimeouts(self):
+        return
 
     async def sendICMP(self, targetIP, onlinkID=None):
         """
@@ -343,6 +399,7 @@ class L3Device(Device):
         Packet is addressed to H2 over L3, not L2
 
         """
+        return
         print(self.id, "ICMP init")
         if not onlinkID:
             onlinkID = self.interfaces[0].id
@@ -454,11 +511,23 @@ class L3Device(Device):
     # By default, a L3Device has DHCP Client functionality
 
     ## Send D(iscover) or R(equest)
-    def sendDHCP(self, context, onlink=None):
+    async def sendDHCP(self, context, onlink=None, timeout=5):
         p, link = self.DHCPClient.sendDHCP(context)
-        print("===", self.id, "using tx", p["L3"]["Data"]["xid"])
+        #print("===", self.id, "using tx", p["L3"]["Data"]["xid"])
         self.send(p, link)
+
     
+        # If timeout, block for that many seconds waiting for the event
+        # representing a complete DHCP transaction
+        now = time.time()
+        if timeout:
+            while (time.time() - now) < timeout:
+                if self.checkEvent("DHCP"):
+                    self.deleteEvent("DHCP")
+                    return
+                await asyncio.sleep(0)
+        return
+                
     def handleDHCP(self, data):
         p, link = self.DHCPClient.handleDHCP(data)
 
@@ -466,8 +535,9 @@ class L3Device(Device):
         if p: 
             self.send(p, link)
         else:
+            self.fireEvent("DHCP")
             # Extract all of the goodies
-            print(self.id, "got ACK?", data)
+            #print(self.id, "got ACK?", data)
             self.nmask = "255.255.255.255"
             self.gateway = "0.0.0.0"
 
@@ -489,8 +559,8 @@ class Switch(L2Device):
         self.id = "{S}" + str(random.randint(10000, 99999999))
         super().__init__(connectedTo, debug, self.id) # Switch
 
-    def _checkTimeouts(self):
-        pass
+    async def _checkTimeouts(self):
+        return
 
     # TODO: Dynamic ARP inspection for DHCP packets (DHCP snooping)
     async def handleData(self, data):
@@ -505,7 +575,7 @@ class Switch(L2Device):
             if self.DEBUG: print(self.id, "Found", data["L2"]["To"], "in ARP table")
             # Grab the link ID associated with the TO field (in the ARP table),
             # then get the link object from that ID
-            self.send(data, self.ARPHandler.mti[ data["L2"]["To"] ])
+            self.send(data, self.ARPHandler.switch_table[ data["L2"]["To"] ])
 
         else: # Flood every interface with the request
             if self.DEBUG: print(self.id, "flooding")
@@ -527,7 +597,7 @@ class Host(L3Device):
         self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
         self.gateway = ""
     
-    def _checkTimeouts(self):
+    async def _checkTimeouts(self):
         # DHCP
         if self.lease[0] >= 0:
             self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
@@ -536,7 +606,8 @@ class Host(L3Device):
                 if self.DEBUG: print("(DHCP)", self.id, "renewing ip", self.getIP())
                 self.DHCP_FLAG = 1
                 print("(DHCP)", self.id, "renewing IP", self.getIP())
-                self.sendDHCP("Renew")
+                await self.sendDHCP("Renew")
+        return 
                 
     def handleDHCP(self, data):
         # A host will only respond to its transaction
@@ -549,7 +620,7 @@ class Host(L3Device):
             #print("-----", self.id, "ignoring DHCP from", data["L2"]["From"], "\n",\
             #    "==My TX:", self.DHCPClient.current_tx, "incoming:", data["L3"]["Data"]["xid"])
             #print("-----", self.id, "ignoring DHCP from", data["L2"]["From"])
-            if DEBUG: print(self.id, "ignoring DHCP from", data["L2"]["From"])
+            if self.DEBUG: print(self.id, "ignoring DHCP from", data["L2"]["From"])
 
 ############################################################
 class Router(L3Device):
@@ -557,8 +628,8 @@ class Router(L3Device):
         self.id = "=R=" + str(random.randint(10000, 99999999))
         super().__init__(ips, connectedTo, debug, self.id)
 
-    def _checkTimeouts(self):
-        pass
+    async def _checkTimeouts(self):
+        return
         
 class Link:
     """ Connects two devices """
@@ -572,10 +643,10 @@ class DHCPServer(L3Device):
         super().__init__(ips, connectedTo, debug, self.id) # DHCPServer
 
         self.nmask = "255.255.255.0"
-        print("DHCP IP INIT:", self.ips[0], self.ips)
+        #print("DHCP IP INIT:", self.ips[0], self.ips)
         self.DHCPServerHandler = DHCPServerHandler(self.ips[0], self.nmask, self.id, self.DEBUG)
         
-    def _checkTimeouts(self):
+    async def _checkTimeouts(self):
         # DHCP lease expiry check
         # IP: (chaddr, lease_offer, lease_give_time)
         del_ips = []
@@ -585,6 +656,7 @@ class DHCPServer(L3Device):
                 # For now, just delete the entry. TODO: Clean up entry deletion procedure per RFC
                 # Mark the entry as deleted
                 del_ips.append(k)
+        return 
 
         # Then, actually delete it
         if del_ips:
@@ -596,8 +668,7 @@ class DHCPServer(L3Device):
         response, link = self.DHCPServerHandler.handleDHCP(data)
         self.send(response, link)
 
-if __name__ == "__main__":
-
+async def main():
     #A, B, C = Host(), Host(), Host()
     #S1 = Switch([A])
     #R1 = Router(["10.10.10.1"])
@@ -613,12 +684,16 @@ if __name__ == "__main__":
 
     A = Host()
     B = Host()
-    D1 = DHCPServer("1.1.1.2")
+    D1 = DHCPServer("1.1.1.2", debug=1)
     S1 = Switch([A, B, D1], debug=0)
 
-    A.sendDHCP("init")
-    time.sleep(1)
-    B.sendDHCP("init")
+    await A.sendDHCP("init", timeout=None)
+    await B.sendDHCP("init", timeout=None)
+
+
+
+if __name__ == "__main__":
+    asyncio.run( main() )
 
 
 

@@ -216,6 +216,9 @@ class DHCPClientHandler:
         self.interfaces = interfaces
         self.DEBUG = debug
         
+        # 1 Subnet mask
+        # 3 Router ID
+        # 6 DNS Server
         self.requested_options = [1,3,6]
         
         # L3
@@ -241,10 +244,7 @@ class DHCPClientHandler:
         """
         ######
 
-        #if data["L3"]["Data"]["xid"] != self.current_tx:
-        #    return None, None
-
-        if self.DEBUG == 2: print("(DHCP)", self.id, "got", data)
+        if self.DEBUG == 2: print("(DHCP.py)", self.id, "got", data)
 
         # Process O(ffer)
         if data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"]["options"][53] == 2 and data["L3"]["Data"]["xid"] == self.current_tx:  
@@ -253,7 +253,8 @@ class DHCPClientHandler:
             if self.DEBUG: print("(DHCP)", self.id, "received DHCP Offer, sending Request (broadcast)")
             self.DHCP_FLAG = 1
             self.offered_ip = data["L3"]["Data"]["yiaddr"]
-            self.DHCP_IP = data["L3"]["SIP"] if not 6 in data["L3"]["Data"]["options"] else data["L3"]["Data"]["options"][6]
+            self.DHCP_IP = data["L3"]["SIP"] if not 54 in data["L3"]["Data"]["options"] else data["L3"]["Data"]["options"][54]
+            print("    DHCP IP: ", self.DHCP_IP)
             self.DHCP_MAC = data["L2"]["From"] # Not reliable if not on same network
 
             # RFC2131 S4.4.1 Table 5
@@ -333,8 +334,8 @@ class DHCPClientHandler:
             return p, onLinkID
         
         # Send R(equest) renewal
-        if context.lower() == "Renew":
-            print("(DHCP)", self.id, "sending DHCP Request (Renewal)")
+        if context.lower() == "renew":
+            print("(DHCP)", self.id, "sending DHCP Request (Renewal) ==>", self.DHCP_IP)
 
             # RFC2131 S4.4.1 Table 5
             # Client must send: 53
