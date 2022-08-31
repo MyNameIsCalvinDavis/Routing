@@ -1,6 +1,7 @@
 import random
 import time
 import threading
+from Debug import *
 
 import asyncio
 """
@@ -96,6 +97,7 @@ class Device(ABC):
             self._events.add(args)
 
     def deleteEvent(self, *args):
+        # After checking for an event and finding it, you should delete it
         self._events.remove(args)
 
     def checkEvent(self, *args):
@@ -116,13 +118,12 @@ class Device(ABC):
             await self._checkTimeouts()
             if self.listen_buffer:
                 data = self.listen_buffer.pop(0)
-                if self.DEBUG == 1:
-                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
-                if self.DEBUG == 2:
-                    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
+                if self.DEBUG: Debug(self.id, "got data from", Debug.colorID(self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id) )
+                    #print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id)
+                #if self.DEBUG == 2:
+                #    print(self.id + " got data from " + self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id + "\n    " + str(data))
                 
                 #self.handleData(data)
-                print("--", self.id, "handling data")
                 await self.handleData(data)
     
     @abstractmethod
@@ -207,8 +208,6 @@ class Device(ABC):
         if onlinkID == None:
             onlinkID = self.links[0].id
 
-        #print("    Post:", self.id, "sending to", onlinkID)
-        
         # Is data in the right format?
         for k, v in data.items():
             if v == "": continue
@@ -223,8 +222,8 @@ class Device(ABC):
         data["L2"]["FromLink"] = onlinkID
 
         end = self.getOtherDeviceOnInterface(onlinkID)
-        if self.DEBUG == 1: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"])
-        if self.DEBUG == 2: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"] + "\n    " + str(data))
+        if self.DEBUG: Debug(self.id, "==>", Debug.colorID(end.id), "via", Debug.color(data["L2"]["FromLink"], "ul"), color="green")
+        #if self.DEBUG == 1: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"])
 
         self.lock.acquire()
         end.listen_buffer.append(data)
@@ -332,48 +331,40 @@ class L3Device(Device):
         
         :param data: See `Headers.makePacket()`, dict
         """
-        print(self.id, "got", data)
         if data["L2"]["To"] not in [self.id, MAC_BROADCAST]: # L2 destination check
             print(self.id, "got L2 frame, ignoring")
             return
 
-        print(self.id, "A")
         if data["L2"]["EtherType"] == "ARP": # L2 multiplexing
             #self.handleARP(data)
             await self.handleARP(data)
         
         elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
             
-            print(self.id, "B")
             #if data["L3"]["DIP"] != self.getIP() and data["L3"]["DIP"] != IP_BROADCAST: # L3 destination check
             if data["L3"]["DIP"] not in [self.getIP(), IP_BROADCAST]:
-                #print(self.id, ":", self.getIP(), "req:", data["L3"]["DIP"])
-                #print(self.id, "got L3 packet, ignoring")
                 return
 
-            print(self.id, "C")
             #https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
             if data["L3"]["Protocol"] == "UDP": # 17
 
-                print(self.id, "D")
                 # Handle UDP protocols
 
                 # DHCP
                 if data["L4"]["DPort"] in [67, 68]: # L4 multiplexing
-                    print(self.id, "handling DHCP")
-                    #self.handleDHCP(data)
                     self.handleDHCP(data)
                 # elif...
                 # elif...
                 # elif...
                 else:
-                    if self.DEBUG: print("(Error)", self.id, "not configured for port", data["L4"]["DPort"])
+                    if self.DEBUG: Debug(self.id, data["L4"]["DPort"], "not configured!", color="red")
+                    #if self.DEBUG: print("(Error)", self.id, "not configured for port", data["L4"]["DPort"])
             
             elif data["L3"]["Protocol"] == "ICMP": # 1
                 #self.handleICMP(data)
                 await self.handleICMP(data)
         else:
-            print(self.id, "ignoring", data["L2"]["From"], data)
+            if self.DEBUG: Debug(self.id, "ignoring", data["L2"]["From"], color="yellow")
         
         return
     
@@ -601,11 +592,12 @@ class Host(L3Device):
         # DHCP
         if self.lease[0] >= 0:
             self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-            print(self.id, "===", self.lease_left, "/", self.lease[0])
+            if self.DEBUG: Debug(self.id, "===", self.lease_left, "/", self.lease[0])
             if self.lease_left <= 0.5 * self.lease[0] and self.DHCP_FLAG != 1:
-                if self.DEBUG: print("(DHCP)", self.id, "renewing ip", self.getIP())
+                #if self.DEBUG: print("(DHCP)", self.id, "renewing ip", self.getIP())
+                if self.DEBUG: Debug(self.id, "renewing ip", self.getIP(), color="green")
                 self.DHCP_FLAG = 1
-                print("(DHCP)", self.id, "renewing IP", self.getIP())
+                #print("(DHCP)", self.id, "renewing IP", self.getIP())
                 await self.sendDHCP("Renew")
         return 
                 
@@ -620,7 +612,9 @@ class Host(L3Device):
             #print("-----", self.id, "ignoring DHCP from", data["L2"]["From"], "\n",\
             #    "==My TX:", self.DHCPClient.current_tx, "incoming:", data["L3"]["Data"]["xid"])
             #print("-----", self.id, "ignoring DHCP from", data["L2"]["From"])
-            if self.DEBUG: print(self.id, "ignoring DHCP from", data["L2"]["From"])
+
+            #if self.DEBUG: print(self.id, "ignoring DHCP from", data["L2"]["From"])
+            if self.DEBUG: Debug(self.id, "ignoring DHCP from", data["L2"]["From"], color="yellow")
 
 ############################################################
 class Router(L3Device):
@@ -644,7 +638,7 @@ class DHCPServer(L3Device):
 
         self.nmask = "255.255.255.0"
         #print("DHCP IP INIT:", self.ips[0], self.ips)
-        self.DHCPServerHandler = DHCPServerHandler(self.ips[0], self.nmask, self.id, self.DEBUG)
+        self.DHCPServerHandler = DHCPServerHandler(self.ips[0], self.nmask, self.id, debug)
         
     async def _checkTimeouts(self):
         # DHCP lease expiry check
@@ -664,7 +658,8 @@ class DHCPServer(L3Device):
             if self.DEBUG: print("(DHCP)", self.id, "deleted entries from lease table")
 
     def handleDHCP(self, data):
-        print(self.id, "got DHCP from", data["L2"]["From"])
+        if self.DEBUG: Debug(self.id, "got DHCP from " + Debug.colorID(data["L2"]["From"]))
+        #print(self.id, "got DHCP from", data["L2"]["From"])
         response, link = self.DHCPServerHandler.handleDHCP(data)
         self.send(response, link)
 
