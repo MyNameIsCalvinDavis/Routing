@@ -26,23 +26,28 @@ class Debug:
         [15, 251, 252, 253, 254, 255, 188, 7, 159, 123, 122, 158, 230, 231, 224, 225]
         ]
 
-    def __init__(self, ID, *args, color="white"):
+    def __init__(self, ID, *args, color="white", f=None):
+        if f: f = os.path.basename(f)
+        else: f = ""
         
         text = ""
         for item in args:
             if item in Debug.ID_color_map:
                 text += Debug.colorID(item) + Debug.getColor(color) + " "
             else:
-                text += str(item) + " "
+                text += Debug.getColor(color) + str(item) + " "
         text = text[:-1] # Remove the last space
 
         # Map the incoming host to a random extended color
         if not ID in Debug.ID_color_map:
             Debug.ID_color_map[ID] = "\u001b[38;5;{0}m".format(random.choice(Debug.extended_not_white), bcolors.RESET)
         
-        self.s = "{:<15} {}|{} {}".format(
-            Debug.color( str(self._getms() - start).zfill(4), "blue" ),
-            Debug.color( sys.argv[0], "yellow" ),
+        self.s = "{:<15} {:<30}|{} {}".format(
+        #self.s = "{:<15}|{} {}".format(
+            Debug.color( str(self._getms() - start).zfill(6), "blue" ),
+            #Debug.color( self.__module__, "yellow" ),
+            #Debug.color( fromfile(), "yellow" ),
+            Debug.color( f, "yellow" ),
             Debug.colorID( ID ),
             Debug.color( text, color )
         )
@@ -59,6 +64,7 @@ class Debug:
         # Choose a name, or provide an ANSI color code
         if color.isalpha():
             color = Debug.getColor(color)
+
         return bcolors.RESET + color + str(text) + bcolors.RESET
     
     @staticmethod
@@ -81,6 +87,9 @@ class Debug:
             Debug.ID_color_map[ID] = "\u001b[38;5;{0}m".format(random.choice(Debug.extended_not_white), bcolors.RESET)
         
         color = Debug.ID_color_map[ID]
+        #if Debug.user_color:
+        #    return bcolors.RESET + color + ID + bcolors.RESET + Debug.getColor(Debug.user_color)
+        #else:
         return bcolors.RESET + color + ID + bcolors.RESET
 
 if __name__ == "__main__":

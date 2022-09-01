@@ -26,8 +26,10 @@ class ARPHandler:
         :returns: The response packet, dict
         :returns: The linkID it should be sent out on, str
         """
-        print(self.DEBUG)
-        if self.DEBUG: print(self.id, "sending ARP request to", targetID)
+        if self.DEBUG:
+            Debug(self.id, "sending ARP request to", targetID,
+                color="green", f=self.__class__.__name__
+            )
         if onlinkID == None:
             onlinkID = self.links[0].id
         elif not isinstance(onlinkID, str):
@@ -53,7 +55,10 @@ class ARPHandler:
         # If an ip function hasnt been provided, then this device has no IP,
         # so it can ignore the ARP request
         if not self.getIP:
-            print(self.id, "has no IP - ignoring ARP")
+            if self.DEBUG:
+                Debug(self.id, "has no IP - ignoring ARP",
+                    color="yellow", f=self.__class__.__name__
+                ) 
             return
 
         # Receiving an ARP Request

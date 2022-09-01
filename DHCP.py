@@ -1,6 +1,6 @@
 from Headers import *
-import time
 from Debug import *
+import time
 
 # This DHCP S/C implements most of the "MUST" functionality
 # described in RFC2131, with the exception being retransmission
@@ -79,7 +79,10 @@ class DHCPServerHandler:
         while True:
             x = "10.10.10." + str(random.randint(2, 254))
             #if self.DEBUG: print("(DHCP)", self.id, "Finding an IP:", x, "for client")
-            if self.DEBUG: Debug(self.id, "Finding an IP for client:", Debug.color(x, "white"), color="green")
+            if self.DEBUG: 
+                Debug(self.id, "Finding an IP for client:", Debug.color(x, "blue"), 
+                    color="green", f=self.__class__.__name__
+                )
             if not x in self.leased_ips:
                 return x
 
@@ -99,7 +102,10 @@ class DHCPServerHandler:
         :returns: The linkID it should be sent out on, str
         """
         
-        if self.DEBUG: Debug(self.id, "My IP:", self.ip, "=== Client IP:", Debug.color(data["L3"]["SIP"], "blue") )
+        if self.DEBUG:
+            Debug(self.id, "My IP:", Debug.color(self.ip, "blue"), "=== Client IP:", Debug.color(data["L3"]["SIP"], "blue"), 
+                color="green", f=self.__class__.__name__ 
+            )
         # Process D(iscover) request
         if data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"]["options"][53] == 1:  
             # Send DHCP Offer
@@ -118,7 +124,10 @@ class DHCPServerHandler:
             }
 
             options = mergeDicts(requested_options, server_options)
-            if self.DEBUG: Debug(self.id, "Sending server options:", Debug.color(options, "white"), color="green")
+            if self.DEBUG:
+                Debug(self.id, "Sending server options:", Debug.color(options, "white"), 
+                    color="green", f=self.__class__.__name__
+                )
             #print("DHCP Server opts sending:", options)
 
             # Broadcast (flags=0) a response (op=2) # TODO: Verify with table 4.3.1$3
@@ -142,7 +151,10 @@ class DHCPServerHandler:
 
             #if self.DEBUG: print("(DHCP)", self.id, "received Discover from", data["L2"]["From"])
             #if self.DEBUG: print("(DHCP)", self.id, "sending Offer to", data["L2"]["From"])
-            if self.DEBUG: Debug(self.id, "received Discover from", data["L2"]["From"], ", sending offer", color="green")
+            if self.DEBUG: 
+                Debug(self.id, "received Discover from", data["L2"]["From"], ", sending offer", 
+                    color="green", f=self.__class__.__name__
+                )
             if self.DEBUG == 2: print(p)
             return p, data["L2"]["FromLink"]
 
@@ -189,9 +201,13 @@ class DHCPServerHandler:
                 )
             p = makePacket(p2, p3, p4)
 
-            if self.DEBUG: Debug(self.id, "received Request from", data["L2"]["From"], color="green")
-            if self.DEBUG: Debug(self.id, "sending ACK to", data["L2"]["From"], color="green")
-            if self.DEBUG == 2: print(p)
+            if self.DEBUG: 
+                Debug(self.id, "received Request from", data["L2"]["From"], 
+                    color="green", f=self.__class__.__name__
+                )
+                Debug(self.id, "sending ACK to", data["L2"]["From"], 
+                    color="green", f=self.__class__.__name__
+                )
             
             # IP: (chaddr, lease_offer, lease_give_time)
             # Update leased IP
@@ -209,7 +225,10 @@ class DHCPServerHandler:
             return p, data["L2"]["FromLink"]
 
         else:
-            if self.DEBUG: Debug(self.id, "Ignoring", color="yellow")
+            if self.DEBUG:
+                Debug(self.id, "Ignoring", 
+                    color="yellow", f=self.__class__.__name__
+                )
             #if self.DEBUG: print(self.id, "Ignoring")
 
 # Not a Device, just deals with DHCP functionality
@@ -256,7 +275,10 @@ class DHCPClientHandler:
             # Send R(equest)
             
             #if self.DEBUG: print("(DHCP)", self.id, "received DHCP Offer, sending Request (broadcast)")
-            if self.DEBUG: Debug(self.id, "received DHCP Offer, sending Request (broadcast)", "green")
+            if self.DEBUG:
+                Debug(self.id, "received DHCP Offer, sending Request (broadcast)", 
+                    color="green", f=self.__class__.__name__
+                )
             self.DHCP_FLAG = 1
             self.offered_ip = data["L3"]["Data"]["yiaddr"]
             self.DHCP_IP = data["L3"]["SIP"] if not 54 in data["L3"]["Data"]["options"] else data["L3"]["Data"]["options"][54]
@@ -299,7 +321,9 @@ class DHCPClientHandler:
             #self.current_xid = -1
             #if self.DEBUG: print("(DHCP)", self.id, "received DHCP ACK from", data["L2"]["From"]+".", "New IP:", self.ip)
             if self.DEBUG: 
-                Debug(self.id, "received DHCP ACK from", data["L2"]["From"], color="green")
+                Debug(self.id, "received DHCP ACK from", data["L2"]["From"], 
+                    color="green", f=self.__class__.__name__
+                )
         else:
             if self.DEBUG: genericIgnoreMessage("DHCP", data["L2"]["From"])
         
@@ -321,7 +345,10 @@ class DHCPClientHandler:
         
         # Send D(iscover)
         if context.lower() == "init": 
-            if self.DEBUG: Debug(self.id, "sending DHCP Discover", color="green")
+            if self.DEBUG:
+                Debug(self.id, "sending DHCP Discover", 
+                    color="green", f=self.__class__.__name__
+                )
             
             # RFC2131 S4.4.1 Table 5
             # Client must send: 53
@@ -343,7 +370,10 @@ class DHCPClientHandler:
         
         # Send R(equest) renewal
         if context.lower() == "renew":
-            if self.DEBUG: Debug(self.id, "sending DHCP Request Renewal", Debug.color(self.DHCP_IP, "blue") )
+            if self.DEBUG: 
+                Debug(self.id, "sending DHCP Request Renewal", Debug.color(self.DHCP_IP, "blue"), 
+                    f=self.__class__.__name__
+                )
             #print("(DHCP)", self.id, "sending DHCP Request (Renewal) ==>", self.DHCP_IP)
 
             # RFC2131 S4.4.1 Table 5
