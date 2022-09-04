@@ -1,5 +1,6 @@
 from Headers import *
 from Debug import *
+import ipaddress
 import time
 
 # This DHCP S/C implements most of the "MUST" functionality
@@ -23,13 +24,39 @@ class DHCPServerHandler:
     """
     Handles DHCP Discovery / Request / Renewal
     """
-    def __init__(self, ip, nmask, haddr, DEBUG):
+    def __init__(self, ip, nmask, haddr, gateway, DEBUG):
         """
         :param ip: DHCP Server IP, str
         :param nmask: Netmask of the served subnet, str
         """
+        nmask = str(nmask)
         self.ip = ip
         self.nmask = nmask
+
+        self.gateway = splitAddr(gateway)[0]
+        print("DHCP made gateway", self.gateway, "from", splitAddr(gateway), "original", gateway)
+
+        if splitAddr(gateway)[1] != self.nmask:
+            raise ValueError("Mask conflict between gateway", splitAddr(gateway), "and self", self.nmask)
+
+        # ipaddress doesn't like host bits
+        # so get rid of the host bits
+        
+        #range_from_ip = ip.split("/")[0].split(".")
+        #range_from_ip[-1] = "0"
+        #range_from_ip = ".".join(range_from_ip)
+        #
+        #print(self.ip, self.nmask, range_from_ip, removeHostBits(range_from_ip))
+        
+        print("IP",self.ip, "NM", self.nmask, "GW", gateway)
+        
+        if self.nmask == 0: raise
+
+        self.ip_range = [str(ip) for ip in ipaddress.IPv4Network(removeHostBits(ip) + "/" + nmask)]
+        self.ip_range = self.ip_range[10:] # Reserve the first 10 IPs in a subnet for whatever
+        try: self.ip_range.remove(ip)
+        except: pass
+
         self.leased_ips = {}
         self.lease_offer = 20
         self.id = haddr
@@ -60,7 +87,7 @@ class DHCPServerHandler:
             if opt == 1: # Subnet mask
                 result[opt] = self.nmask
             if opt == 3: # Router Addr
-                result[opt] = self.ip
+                result[opt] = self.gateway
             if opt == 6: # DNS Server
                 result[opt] = "" # Not doing DNS
             if opt == 51: # Lease Offer
@@ -77,7 +104,8 @@ class DHCPServerHandler:
         :returns: "X.X.X.X", str
         """
         while True:
-            x = "10.10.10." + str(random.randint(2, 254))
+            #x = "10.10.10." + str(random.randint(2, 254))
+            x = random.choice(self.ip_range)
             #if self.DEBUG: print("(DHCP)", self.id, "Finding an IP:", x, "for client")
             if self.DEBUG: 
                 Debug(self.id, "Finding an IP for client:", Debug.color(x, "blue"), 
@@ -254,7 +282,6 @@ class DHCPClientHandler:
         self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
         self.DHCP_MAC = ""
         self.DHCP_IP = ""
-        self.gateway = ""
         self.current_tx = ""
 
     def handleDHCP(self, data):

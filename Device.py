@@ -119,8 +119,13 @@ class Device(ABC):
             await self._checkTimeouts()
             if self.listen_buffer:
                 data = self.listen_buffer.pop(0)
-                if self.DEBUG: 
+                if self.DEBUG == 1: 
                     Debug(self.id, "got data from", Debug.colorID(self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id), 
+                        color="green", f=self.__class__.__name__
+                    )
+                if self.DEBUG == 2:
+                    Debug(self.id, "got data from", Debug.colorID(self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id),
+                        str(data), 
                         color="green", f=self.__class__.__name__
                     )
                 await self.handleData(data)
@@ -161,18 +166,31 @@ class Device(ABC):
             
         return s 
     
-    async def sendARP(self, targetIP, onLinkID=None):
+    async def sendARP(self, targetIP, onLinkID=None, timeout=5):
         """
         Send an ARP request to another device on the same subnet
         
         :param targetID: id parameter of target device
         :param onLinkID: optional, id parameter of link to be send out on
         """
-        assert isinstance(targetIP, str)
+        if not isinstance(targetIP, str):
+            raise ValueError("TargetIP must be string, given: " + str(targetIP) )
         if onLinkID: assert isinstance(onLinkID, str)
 
-        p, link = self.ARPHandler.sendARP(targetID, onLinkID)
+        p, link = self.ARPHandler.sendARP(targetIP, onLinkID)
         self.send(p, link)
+
+        # If timeout, block for that many seconds waiting for the event
+        # representing a complete ARP transaction
+        now = time.time()
+        if timeout:
+            while (time.time() - now) < timeout:
+                if self.checkEvent("ARPRESPONSE"):
+                    self.deleteEvent("ARPRESPONSE")
+                    return True
+                await asyncio.sleep(0)
+        return False
+            
 
     async def handleARP(self, data):
         """

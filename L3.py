@@ -1,9 +1,11 @@
 from Device import *
 from ARP import *
 from DHCP import *
+from Debug import Debug
+from Headers import removeHostBits
 import asyncio
 import random
-from Debug import Debug
+import ipaddress
 
 
 
@@ -18,12 +20,27 @@ class L3Device(Device):
         :param ID: Optionally a child class can provide its ID to be used with inits of some Handler, like DHCP or ARP
         """
         self.linkid_to_ip = {}
+        self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
 
-        # Make ips always be a list, with ["0.0.0.0"] as default
-        if ips: self.ips = ips
-        else:   self.ips = ["0.0.0.0"]
-        if isinstance(self.ips, str): self.ips = [self.ips]
+        # Make ips always be a list, with ["0.0.0.0/32"] as default
+        #if ips:
+        #    for ip in self.ips:
+        #        if 
+        #else:   self.ips = ["0.0.0.0"]
 
+        if isinstance(ips, str): ips = [ips]
+
+        self.ips = []
+        self.nmasks = []
+        for item in ips:
+            l = item.split("/")
+            self.ips.append(l[0])
+            netmask = '.'.join([str((0xffffffff << (32 - int(l[1])) >> i) & 0xff) for i in [24, 16, 8, 0]])
+            # TODO Use header func here
+            print("===", removeHostBits(l[0]), netmask)
+            self.nmasks.append(netmask)
+            #self.nmasks.append(ipaddress.IPv4Network(removeHostBits(l[0]) + "/" + l[1]).network_address)
+        print("Processed:", self.ips, self.nmasks)
         super().__init__(connectedTo, debug, ID) # L3Device
         
         # Give this handler the ability to ask for an interface's IP
@@ -46,8 +63,8 @@ class L3Device(Device):
         
         elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
             
-            #if data["L3"]["DIP"] != self.getIP() and data["L3"]["DIP"] != IP_BROADCAST: # L3 destination check
             if data["L3"]["DIP"] not in [self.getIP(), IP_BROADCAST]:
+                print(self.id, "ignoring data from", data["L3"]["SIP"])
                 return
 
             #https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
@@ -69,7 +86,6 @@ class L3Device(Device):
                     #if self.DEBUG: print("(Error)", self.id, "not configured for port", data["L4"]["DPort"])
             
             elif data["L3"]["Protocol"] == "ICMP": # 1
-                #self.handleICMP(data)
                 await self.handleICMP(data)
         else:
             if self.DEBUG: 
@@ -84,62 +100,58 @@ class L3Device(Device):
         return
 
     async def sendICMP(self, targetIP, onlinkID=None):
-        """
-        After DHCP, gateway IP is known
-        Send an ARP looking for gateway's MAC, if not held
-        R responds, now we have their MAC
-        Create packet: L2, L3
-        Send it
-        Router receives it in handleICMP
-            Is this to me (L2): yes
-            Is the destination subnet in my routing table
-                Yes: send it on that interface
-                No: Send to default gateway
-                Else: Drop packet
 
-        Router sends to H2
-        Packet is addressed to H2 over L3, not L2
-
-        """
-        return
-        print(self.id, "ICMP init")
         if not onlinkID:
-            onlinkID = self.interfaces[0].id
-        
+            onlinkID = self.links[0].id
+
         try: self.gateway
         except:
-            print(self.id, "DHCP not configured")
+            raise ValueError(self.id + " has no gateway; configure DHCP first")
+        
+        if not self.getIP():
+            raise ValueError(self.id + " has no IP; configure DHCP first")
 
-        print(self.id, "gateway:", self.gateway)
-        # At this point, device knows gateway IP
-        # Let's find its MAC
-        print(self.id, "async sleep time")
-        print(self.id, self.ARPHandler.mti)
-        asyncio.sleep(4)
-        print(self.id, self.ARPHandler.mti)
+        # We know that we have a gateway and an IP
+        # So construct a packet with ICMP stuff
+        
+        # L3: SIP: Me, DIP: targetIP, proto=ICMP
+        # L2: 
+            # If on the same subnet,
+                # If we have this IPs ID already, L2 to that device ID
+                # If not, ARP first (timeout) then L2 to the device ID
+            # If not
+                # If we have gateway ID: Send to gateway ID
+                # If not, ARP gateway (timeout), then send to gateway ID
+        
+        # For now, assume always on another subnet
+        # And always ARP the gateway
+        
+        #if targetIP not in self.ARPHandler.arp_cache:
+        #    # Send an ARP Request to the targetIP, blocking
+        #    x = await self.sendARP(targetIP)
         
         
-        # Given an IP:
-        # If the IP is in our network:
-            # Obtain the IP's MAC address via ARP
-                # Send ARP, then set some flag
-                # In checktimeouts, check this flags timeout (5s?)
-            # Once a MAC has been obtained, send an ICMP packet to that MAC
-            # If no MAC, assume failure. Retransmit?
-        # If not:
-            # Create the ICMP packet and send it to the gateway
-            # ARP the gateway, send to gateway
+        # ARP the gateway
+        print("Sending ARP")
+        if await self.sendARP(self.gateway): # Success
+            p2 = makePacket_L2("IPv4", self.id, self.ARPHandler.arp_cache[self.gateway] )
+        else: # Failure
+            raise ValueError("ICMP Failed - no gateway")
+        
+        p3 = makePacket_L3(self.getIP(), targetIP, proto="ICMP")
+        p = makePacket(p2, p3)
 
+        # Send the ICMP packet to gateway
+        print(self.id, "sending ICMP to gateway @", self.gateway)
+        self.send(p, onlinkID)
 
-        #p3 = makePacket_L3(self.getIP(), data["L3"]["SIP"], proto="ICMP")
-        #p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST)
-        #p = makePacket(p2, p3, p4)
-        #self.send(p, onlinkID)
+        return
         
     def handleICMP(self, data):
         # Receive an ICMP packet
         # For now, just fire it back
         
+        print(self.id, "got ICMP data from", data["L2"]["From"])
         return
         #p3 = makePacket_L3(self.data["L3"]["DIP"], data["L3"]["SIP"], proto="ICMP")
         #p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST)
@@ -192,7 +204,8 @@ class L3Device(Device):
         """
 
         if not linkID: linkID = self.links[0].id
-        return self.linkid_to_ip[linkID]
+        try: return self.linkid_to_ip[linkID]
+        except: return None # For devices with no IP
 
     def setIP(self, val, linkID=None):
         """
@@ -218,7 +231,6 @@ class L3Device(Device):
         #print("===", self.id, "using tx", p["L3"]["Data"]["xid"])
         self.send(p, link)
 
-    
         # If timeout, block for that many seconds waiting for the event
         # representing a complete DHCP transaction
         now = time.time()
@@ -226,9 +238,9 @@ class L3Device(Device):
             while (time.time() - now) < timeout:
                 if self.checkEvent("DHCP"):
                     self.deleteEvent("DHCP")
-                    return
+                    return True
                 await asyncio.sleep(0)
-        return
+        return False
                 
     def handleDHCP(self, data):
         p, link = self.DHCPClient.handleDHCP(data)
@@ -238,10 +250,10 @@ class L3Device(Device):
             self.send(p, link)
         else:
             self.fireEvent("DHCP")
+
             # Extract all of the goodies
-            #print(self.id, "got ACK?", data)
             self.nmask = "255.255.255.255"
-            self.gateway = "0.0.0.0"
+            self.gateway = ""
 
             if 1 in data["L3"]["Data"]["options"]:
                 self.nmask = data["L3"]["Data"]["options"][1]
@@ -265,45 +277,37 @@ class Host(L3Device):
 
         # L3
         self.DHCPClient = DHCPClientHandler(self.id, self.links, self.DEBUG)
-        self.nmask = ""
-        self.gateway = ""
-        self.lease = (-1, -1) # (leaseTime, time (s) received the lease)
-        self.lease_left = -1
-        self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
-        self.gateway = ""
+        #self.nmask = ""
+        #self.gateway = ""
+        #self.lease = (-1, -1) # (leaseTime, time (s) received the lease)
+        #self.lease_left = -1
     
     async def _checkTimeouts(self):
         # DHCP
-        if self.lease[0] >= 0:
-            self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-            if self.DEBUG: 
-                Debug(self.id, "===", self.lease_left, "/", self.lease[0], 
-                    f=self.__class__.__name__
-                )
-            if self.lease_left <= 0.5 * self.lease[0] and self.DHCP_FLAG != 1:
-                #if self.DEBUG: print("(DHCP)", self.id, "renewing ip", self.getIP())
-                if self.DEBUG: 
-                    Debug(self.id, "renewing ip", self.getIP(), color="green", 
+        try:
+            if self.lease[0] >= 0:
+                self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
+                if self.DEBUG==2: 
+                    Debug(self.id, "===", self.lease_left, "/", self.lease[0], 
                         f=self.__class__.__name__
                     )
-                self.DHCP_FLAG = 1
-                #print("(DHCP)", self.id, "renewing IP", self.getIP())
-                await self.sendDHCP("Renew")
+                if self.lease_left <= 0.5 * self.lease[0] and self.DHCP_FLAG != 1:
+                    #if self.DEBUG: print("(DHCP)", self.id, "renewing ip", self.getIP())
+                    if self.DEBUG: 
+                        Debug(self.id, "renewing ip", self.getIP(), color="green", 
+                            f=self.__class__.__name__
+                        )
+                    self.DHCP_FLAG = 1
+                    #print("(DHCP)", self.id, "renewing IP", self.getIP())
+                    await self.sendDHCP("Renew")
+        except: pass
         return 
                 
     def handleDHCP(self, data):
         # A host will only respond to its transaction
         if data["L3"]["Data"]["xid"] == self.DHCPClient.current_tx:
-            #print("===", self.id, "responding to", data["L2"]["From"], "\n",\
-            #    "==My TX:", self.DHCPClient.current_tx, "incoming:", data["L3"]["Data"]["xid"])
             super().handleDHCP(data)
         else:
-            
-            #print("-----", self.id, "ignoring DHCP from", data["L2"]["From"], "\n",\
-            #    "==My TX:", self.DHCPClient.current_tx, "incoming:", data["L3"]["Data"]["xid"])
-            #print("-----", self.id, "ignoring DHCP from", data["L2"]["From"])
-
-            #if self.DEBUG: print(self.id, "ignoring DHCP from", data["L2"]["From"])
             if self.DEBUG: 
                 Debug(self.id, "ignoring DHCP from", data["L2"]["From"], 
                     color="yellow", f=self.__class__.__name__
@@ -313,18 +317,25 @@ class Router(L3Device):
     def __init__(self, ips, connectedTo=[], debug=1):
         self.id = "=R=" + str(random.randint(10000, 99999999))
         super().__init__(ips, connectedTo, debug, self.id)
+        
+        #self.DHCPClient = DHCPClientHandler(self.id, self.links, self.DEBUG)
+    
+    def handleDHCP(self, data):
+        # A Router does not respond to DHCP stuff for the most part
+        pass
 
     async def _checkTimeouts(self):
         return
 
 class DHCPServer(L3Device):
-    def __init__(self, ips, connectedTo=[], debug=1): # DHCPServer
+    def __init__(self, ips, gateway, connectedTo=[], debug=1): # DHCPServer
         self.id = "=DHCP=" + str(random.randint(10000, 99999999))
         super().__init__(ips, connectedTo, debug, self.id) # DHCPServer
 
-        self.nmask = "255.255.255.0"
-        #print("DHCP IP INIT:", self.ips[0], self.ips)
-        self.DHCPServerHandler = DHCPServerHandler(self.ips[0], self.nmask, self.id, debug)
+        self.gateway = gateway
+
+        print("DHCP IP INIT:", self.ips[0], self.ips, self.nmasks)
+        self.DHCPServerHandler = DHCPServerHandler(self.ips[0], self.nmasks[0], self.id, self.gateway, debug)
         
     async def _checkTimeouts(self):
         # DHCP lease expiry check
@@ -344,7 +355,7 @@ class DHCPServer(L3Device):
             if self.DEBUG: print("(DHCP)", self.id, "deleted entries from lease table")
 
     def handleDHCP(self, data):
-        if self.DEBUG: 
+        if self.DEBUG:
             Debug(self.id, "got DHCP from " + Debug.colorID(data["L2"]["From"]), 
                 color="green", f=self.__class__.__name__
             )

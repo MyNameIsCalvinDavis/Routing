@@ -25,6 +25,17 @@ def mergeDicts(x, y):
     
     return x
 
+def removeHostBits(s): # TODO: Fix for non-24 masks
+    s = s.split("/")[0].split(".")
+    s[-1] = "0"
+    s = ".".join(s)
+    return s
+
+def splitAddr(s):
+    l = s.split("/")
+    netmask = '.'.join([str((0xffffffff << (32 - int(l[1])) >> i) & 0xff) for i in [24, 16, 8, 0]])
+    return l[0], netmask
+
 def genericIgnoreMessage(inproto, ID, fr=None):
     s = ""
     if fr: s = "from " + fr

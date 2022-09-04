@@ -4,26 +4,17 @@ import asyncio
 
 
 async def main():
-    #A, B, C = Host(), Host(), Host()
-    #S1 = Switch([A])
-    #R1 = Router(["10.10.10.1"])
-    #A = Host()
-    #R1 = Router("10.10.10.1")
-    #S1 = Switch([A, R1])
-    #A.sendARP(R1.id)
-    
-    #A = Host()
-    #S1 = Switch([A], debug=0)
-    #D = DHCPServer("10.10.10.1", [S1])
-    #A.sendDHCP("Init")
-
     A = Host()
     B = Host()
-    D1 = DHCPServer("1.1.1.2", debug=1)
-    S1 = Switch([A, B, D1], debug=0)
+    R = Router(["1.1.1.1/24", "2.2.2.2/24"], debug=2)
+    D1 = DHCPServer("1.1.1.2/24", gateway="1.1.1.1/24", debug=1)
+    S1 = Switch([A, B, D1, R], debug=0)
 
-    await A.sendDHCP("init", timeout=None)
-    await B.sendDHCP("init", timeout=None)
+    await A.sendDHCP("init", timeout=5)
+    await B.sendDHCP("init", timeout=5)
+    
+    print("Bs IP: ", B.getIP())
+    await A.sendICMP(B.getIP())
 
 if __name__ == "__main__":
     asyncio.run( main() )
