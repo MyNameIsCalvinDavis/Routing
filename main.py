@@ -1,7 +1,11 @@
 from L2 import *
 from L3 import *
+#from Debug import *
 import asyncio
 
+def pprint(*args, end="\n"):
+    Debug("", *args, color="white", f="main")
+    
 
 async def main():
     #A = Host()
@@ -16,12 +20,12 @@ async def main():
     #
     #print("Bs IP: ", B.getIP())
     ##await A.sendICMP(B.getIP())
-    A = Host(["1.1.1.1/24"])
+    A = Host(["1.1.1.1/24"], debug=2)
     B = Host(["1.1.1.2/24"])
-    S1 = Switch([A, B])
-    print(A.ARPHandler.arp_cache)
+    S1 = Switch([A, B], debug=0)
+    pprint(A.ARPHandler.arp_cache)
     await A.sendARP(B.getIP())
-    print(A.ARPHandler.arp_cache)
+    pprint(A.ARPHandler.arp_cache)
 
 
 

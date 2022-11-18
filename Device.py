@@ -125,8 +125,8 @@ class Device(ABC):
                     )
                 if self.DEBUG == 2:
                     Debug(self.id, "got data from", Debug.colorID(self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id),
-                        str(data), 
-                        color="green", f=self.__class__.__name__
+                        data, 
+                        color="blue", f=self.__class__.__name__
                     )
                 await self.handleData(data)
     

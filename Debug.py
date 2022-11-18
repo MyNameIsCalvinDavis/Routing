@@ -31,8 +31,10 @@ class Debug:
         else: f = ""
         
         text = ""
-        for item in args:
-            if item in Debug.ID_color_map:
+        for item in args:   
+            if type(item) == type({}): # Printing a dict
+                text += Debug.color(item, Debug.getColor("white")) + " "
+            elif item in Debug.ID_color_map: # Printing an ID
                 text += Debug.colorID(item) + Debug.getColor(color) + " "
             else:
                 text += Debug.getColor(color) + str(item) + " "
@@ -43,10 +45,7 @@ class Debug:
             Debug.ID_color_map[ID] = "\u001b[38;5;{0}m".format(random.choice(Debug.extended_not_white), bcolors.RESET)
         
         self.s = "{:<15} {:<30}|{} {}".format(
-        #self.s = "{:<15}|{} {}".format(
             Debug.color( str(self._getms() - start).zfill(6), "blue" ),
-            #Debug.color( self.__module__, "yellow" ),
-            #Debug.color( fromfile(), "yellow" ),
             Debug.color( f, "yellow" ),
             Debug.colorID( ID ),
             Debug.color( text, color )

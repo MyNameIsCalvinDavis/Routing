@@ -7,8 +7,6 @@ import asyncio
 import random
 import ipaddress
 
-
-
 class L3Device(Device):
     def __init__(self, ips=[], connectedTo=[], debug=1, ID=None): # L3Device
         """
@@ -21,12 +19,6 @@ class L3Device(Device):
         """
         self.linkid_to_ip = {} # For getting the IP on an interface
         self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
-
-        # Make ips always be a list, with ["0.0.0.0/32"] as default
-        #if ips:
-        #    for ip in self.ips:
-        #        if 
-        #else:   self.ips = ["0.0.0.0"]
 
         if isinstance(ips, str): ips = [ips]
 
@@ -42,7 +34,6 @@ class L3Device(Device):
             self.nmasks.append(netmask)
         super().__init__(connectedTo, debug, ID) # L3Device
         
-        # Give this handler the ability to ask for an interface's IP
         self.ARPHandler = ARPHandler(self.id, self.links, self.DEBUG, ipfunc=self.getIP)
         
     async def handleData(self, data):
@@ -57,15 +48,16 @@ class L3Device(Device):
             return
 
         if data["L2"]["EtherType"] == "ARP": # L2 multiplexing
-            #self.handleARP(data)
             await self.handleARP(data)
         
+        # ===================================================
+
         elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
             
             if data["L3"]["DIP"] not in [self.getIP(), IP_BROADCAST]:
                 print(self.id, "ignoring data from", data["L3"]["SIP"])
                 return
-
+            
             #https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
             if data["L3"]["Protocol"] == "UDP": # 17
 
@@ -223,52 +215,6 @@ class L3Device(Device):
         #self.ip_to_linkid[val] = linkID
 
     
-    ###### DHCP
-
-    # By default, a L3Device has DHCP Client functionality
-
-    ## Send D(iscover) or R(equest)
-    async def sendDHCP(self, context, onlink=None, timeout=5):
-        p, link = self.DHCPClient.sendDHCP(context)
-        #print("===", self.id, "using tx", p["L3"]["Data"]["xid"])
-        self.send(p, link)
-
-        # If timeout, block for that many seconds waiting for the event
-        # representing a complete DHCP transaction
-        now = time.time()
-        if timeout:
-            while (time.time() - now) < timeout:
-                if self.checkEvent("DHCP"):
-                    self.deleteEvent("DHCP")
-                    return True
-                await asyncio.sleep(0)
-        return False
-                
-    def handleDHCP(self, data):
-        p, link = self.DHCPClient.handleDHCP(data)
-
-        # On DORA ACK, no packet is returned to send out
-        if p: 
-            self.send(p, link)
-        else:
-            self.fireEvent("DHCP")
-
-            # Extract all of the goodies
-            self.nmask = "255.255.255.255"
-            self.gateway = ""
-
-            if 1 in data["L3"]["Data"]["options"]:
-                self.nmask = data["L3"]["Data"]["options"][1]
-            if 3 in data["L3"]["Data"]["options"]:
-                self.gateway = data["L3"]["Data"]["options"][3]
-
-            #self.ip = data["L3"]["Data"]["yiaddr"]
-            self.setIP(data["L3"]["Data"]["yiaddr"])
-
-            self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
-            self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-            self.DHCP_FLAG = 2
-            self.current_xid = -1
 
 class Host(L3Device):
     def __init__(self, ips=[], connectedTo=[], debug=1):
@@ -287,7 +233,7 @@ class Host(L3Device):
         try:
             if self.lease[0] >= 0:
                 self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-                if self.DEBUG==2: 
+                if self.DEBUG == 2: 
                     Debug(self.id, "===", self.lease_left, "/", self.lease[0], 
                         f=self.__class__.__name__
                     )
@@ -303,10 +249,54 @@ class Host(L3Device):
         except: pass
         return 
                 
+    ## Send D(iscover) or R(equest)
+    async def sendDHCP(self, context, onlink=None, timeout=5):
+        # Assign internal thing to not do the annoying event system
+        # Probably: Another table of some sort
+        # check internally if the table is set, or if I have an IP
+        # IF i dont have an IP / something else, while loop
+
+        p, link = self.DHCPClient.sendDHCP(context)
+        self.send(p, link)
+
+        # If timeout, block for that many seconds waiting for the event
+        # representing a complete DHCP transaction
+        now = time.time()
+        if timeout:
+            while (time.time() - now) < timeout:
+                if self.checkEvent("DHCP"):
+                    self.deleteEvent("DHCP")
+                    return True
+                await asyncio.sleep(0)
+        return False
+                
     def handleDHCP(self, data):
-        # A host will only respond to its transaction
+        
+        p, link = self.DHCPClient.handleDHCP(data)
+
         if data["L3"]["Data"]["xid"] == self.DHCPClient.current_tx:
-            super().handleDHCP(data)
+            # On DORA ACK, no packet is returned to send out
+            if p: 
+                self.send(p, link)
+            else:
+                self.fireEvent("DHCP")
+
+                # Extract all of the goodies
+                self.nmask = "255.255.255.255"
+                self.gateway = ""
+
+                if 1 in data["L3"]["Data"]["options"]:
+                    self.nmask = data["L3"]["Data"]["options"][1]
+                if 3 in data["L3"]["Data"]["options"]:
+                    self.gateway = data["L3"]["Data"]["options"][3]
+
+                #self.ip = data["L3"]["Data"]["yiaddr"]
+                self.setIP(data["L3"]["Data"]["yiaddr"])
+
+                self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
+                self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
+                self.DHCP_FLAG = 2
+                self.current_xid = -1
         else:
             if self.DEBUG: 
                 Debug(self.id, "ignoring DHCP from", data["L2"]["From"], 

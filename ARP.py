@@ -76,8 +76,10 @@ class ARPHandler:
             
             # Do I have the IP requested?
             if self.getIP(data["L2"]["FromLink"]) == data["L2"]["Data"]["TPA"]:
-                if self.DEBUG: print("(ARP)", self.id, "got ARP-Rq, sending ARP-Rp")
-
+                if self.DEBUG:
+                    Debug(self.id, "got Request from", data["L2"]["From"], "- sending Response",
+                        color="green", f=self.__class__.__name__
+                    )
                 ARP = createARPHeader(2, fr=self.id, frIP=self.getIP(), to=data["L2"]["Data"]["SHA"], toIP=data["L2"]["Data"]["SPA"])
                 p2 = makePacket_L2("ARP", self.id, data["L2"]["From"], data=ARP) # Resp has no data
                 p = makePacket(p2)
@@ -85,16 +87,29 @@ class ARPHandler:
         
         # Receiving an ARP Response
         elif data["L2"]["To"] == self.id and data["L2"]["Data"]["OP"] == 2:
-            if self.DEBUG: print("(ARP)", self.id, "got ARP Response, updating ARP cache")
+            if self.DEBUG:
+                Debug(self.id, "updating ARP cache:", data["L2"]["Data"]["TPA"], "=", data["L2"]["From"],
+                    color="green", f=self.__class__.__name__
+                )
             
             if data["L2"]["Data"]["SPA"] not in self.arp_cache:
                 # Produced if the IP that gets updated is not the one I requested originally
-                print("WARN: Got ARP response for a missing IP - did I request this?")
+                Debug(self.id, "Got ARP response for a missing IP - did I request this?", self.arp_cache,
+                    color="yellow", f=self.__class__.__name__
+                )
+
+            if self.DEBUG == 2:
+                Debug(self.id, "old ARP cache info:", self.arp_cache,
+                    color="blue", f=self.__class__.__name__
+                )
 
             # Update the local ARP cache with the received data
             # x.x.x.x = -H-123123123
             self.arp_cache[data["L2"]["Data"]["SPA"]] = data["L2"]["From"]
-            print(self.id, "updated cache for", data["L2"]["Data"]["TPA"], "=", data["L2"]["From"])
+            if self.DEBUG == 2:
+                Debug(self.id, "new ARP cache info:", self.arp_cache,
+                    color="blue", f=self.__class__.__name__
+                )
 
         else:
             if self.DEBUG: genericIgnoreMessage("ARP", self.id, data["L2"]["From"])
