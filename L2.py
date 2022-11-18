@@ -77,6 +77,8 @@ TODO: A static IP host doesn't know where the gateway is
 class Switch(L2Device):
     def __init__(self, connectedTo=[], debug=1): # Switch
         self.id = "{S}" + str(random.randint(10000, 99999999))
+        self.switch_table = {}
+
         super().__init__(connectedTo, debug, self.id) # Switch
 
     async def _checkTimeouts(self):
@@ -85,17 +87,19 @@ class Switch(L2Device):
     # TODO: Dynamic ARP inspection for DHCP packets (DHCP snooping)
     async def handleData(self, data):
         # Before evaluating, add incoming data to switch table
-        self.ARPHandler.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
+        self.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
+        #self.ARPHandler.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
 
         #self.itm[data["L2"]["FromLink"]] = data["L2"]["From"]
         #if self.DEBUG == 1: print(self.id, "Updated ARP table:", self.ARPHandler.mti)
         
-        # ARP table lookup
-        if data["L2"]["To"] in self.ARPHandler.switch_table:
-            if self.DEBUG: print(self.id, "Found", data["L2"]["To"], "in ARP table")
-            # Grab the link ID associated with the TO field (in the ARP table),
+        # Switch table lookup
+        #if data["L2"]["To"] in self.ARPHandler.switch_table:
+        if data["L2"]["To"] in self.switch_table:
+            if self.DEBUG: print(self.id, "Found", data["L2"]["To"], "in switch table")
+            # Grab the link ID associated with the TO field (in the switch table),
             # then get the link object from that ID
-            self.send(data, self.ARPHandler.switch_table[ data["L2"]["To"] ])
+            self.send(data, self.switch_table[ data["L2"]["To"] ])
 
         else: # Flood every interface with the request
             if self.DEBUG: print(self.id, "flooding")

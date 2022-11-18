@@ -19,7 +19,7 @@ class L3Device(Device):
         :param debug: See `Device.DEBUG`
         :param ID: Optionally a child class can provide its ID to be used with inits of some Handler, like DHCP or ARP
         """
-        self.linkid_to_ip = {}
+        self.linkid_to_ip = {} # For getting the IP on an interface
         self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
 
         # Make ips always be a list, with ["0.0.0.0/32"] as default
@@ -32,15 +32,14 @@ class L3Device(Device):
 
         self.ips = []
         self.nmasks = []
+        self.cidr_nmasks = []
         for item in ips:
             l = item.split("/")
             self.ips.append(l[0])
+            self.cidr_nmasks.append(l[1])
             netmask = '.'.join([str((0xffffffff << (32 - int(l[1])) >> i) & 0xff) for i in [24, 16, 8, 0]])
             # TODO Use header func here
-            print("===", removeHostBits(l[0]), netmask)
             self.nmasks.append(netmask)
-            #self.nmasks.append(ipaddress.IPv4Network(removeHostBits(l[0]) + "/" + l[1]).network_address)
-        print("Processed:", self.ips, self.nmasks)
         super().__init__(connectedTo, debug, ID) # L3Device
         
         # Give this handler the ability to ask for an interface's IP
@@ -89,7 +88,7 @@ class L3Device(Device):
                 await self.handleICMP(data)
         else:
             if self.DEBUG: 
-                Debug(self.id, "ignoring", data["L2"]["From"], 
+                Debug(self.id, "ignoring", data["L2"]["From"], data["L2"]["EtherType"],
                     color="yellow", f=self.__class__.__name__
                 )
         
@@ -106,10 +105,10 @@ class L3Device(Device):
 
         try: self.gateway
         except:
-            raise ValueError(self.id + " has no gateway; configure DHCP first")
+            raise ValueError(self.id + " has no gateway; configure or use DHCP")
         
         if not self.getIP():
-            raise ValueError(self.id + " has no IP; configure DHCP first")
+            raise ValueError(self.id + " has no IP; configure or use DHCP")
 
         # We know that we have a gateway and an IP
         # So construct a packet with ICMP stuff
@@ -191,8 +190,10 @@ class L3Device(Device):
         for i in range(len(self.links)):
             try:
                 self.linkid_to_ip[self.links[i].id] = self.ips[i]
+                #self.ip_to_linkid[self.ips[i]] = self.links[i].id
             except IndexError:
                 self.linkid_to_ip[self.links[i].id] = "0.0.0.0"
+                #self.ip_to_linkid[self.ips[i]] = self.links[0]
                 self.ips.append("0.0.0.0")
     
     def getIP(self, linkID=None):
@@ -219,6 +220,7 @@ class L3Device(Device):
         assert isinstance(val, str)
         if not linkID: linkID = self.links[0].id
         self.linkid_to_ip[linkID] = val
+        #self.ip_to_linkid[val] = linkID
 
     
     ###### DHCP
@@ -268,8 +270,6 @@ class L3Device(Device):
             self.DHCP_FLAG = 2
             self.current_xid = -1
 
-
-
 class Host(L3Device):
     def __init__(self, ips=[], connectedTo=[], debug=1):
         self.id = "-H-" + str(random.randint(10000, 99999999))
@@ -318,13 +318,54 @@ class Router(L3Device):
         self.id = "=R=" + str(random.randint(10000, 99999999))
         super().__init__(ips, connectedTo, debug, self.id)
         
-        #self.DHCPClient = DHCPClientHandler(self.id, self.links, self.DEBUG)
-    
-    def handleDHCP(self, data):
-        # A Router does not respond to DHCP stuff for the most part
-        pass
+        # After super(), we have:
+        # ips [x.x.x.x/y, x.x.x.x/y]
+        # self.ips [x.x.x.x, x.x.x.x]
+        # self.nmasks [y, y]
+        # self.links [...]
+        
+        # Make a static routing table for ip/m:linkid association
+        self.routing_table = {}
+        for index, item in enumerate(ips):
+            self.routing_table[item] = self.links[index]
 
-    async def _checkTimeouts(self):
+    async def handleData(self, data):
+        """
+        Unlike an L3 Device, a router doesn't usually respond to or interact with hosts
+        directly, it just sends them to another network.
+        
+        :param data: See `Headers.makePacket()`, dict
+        """
+        if data["L2"]["To"] not in [self.id, MAC_BROADCAST]: # L2 destination check
+            print(self.id, "got L2 frame, ignoring")
+            return
+        
+        # TODO Consider moving this code to the listener
+        if data["L2"]["EtherType"] == "ARP": # L2 multiplexing
+            #self.handleARP(data)
+            await self.handleARP(data)
+        
+            """
+            elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
+                
+                # I just got an IP packet
+                # Forward the packet to the respective link
+                # based on my routing table
+                # If I dont have that network, drop it and complain
+
+                # TODO: Default gateways
+
+                # IP should be in the form "x.x.x.x/y" or "x.x.x.x"
+                to_ip = data["L3"]["DIP"]
+                if ipaddress.ip_address(to_ip) in ipaddress.ip_network(to_ip, )
+                pass
+            """
+        else:
+            if self.DEBUG: 
+                Debug(self.id, "ignoring", data["L2"]["From"], data["L2"]["EtherType"],
+                    color="yellow", f=self.__class__.__name__
+                )
+        
         return
 
 class DHCPServer(L3Device):

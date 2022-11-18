@@ -6,6 +6,14 @@ class ARPHandler:
         self.DEBUG = debug
         self.id = ID
         self.links = links
+
+        # Used to identify an outgoing packet and its response,
+        # and identify whether a sendX() has completed
+        self.id_counter = 0
+
+        # The table that stores internal connection information
+        self.conn_table = {}
+        # {1:False, 2:True, ...}
         
         # A function passed in from whoever uses this handler
         # to get an IP of that interface / device
@@ -14,10 +22,7 @@ class ARPHandler:
         else:
             self.getIP = None
 
-        self.switch_table = {} # MAC/ID to interface
         self.arp_cache = {} # IP to MAC/ID 
-        # K: Device.id
-        # V: LinkID
 
     def sendARP(self, targetIP, onlinkID=None):
         """ 
@@ -41,11 +46,11 @@ class ARPHandler:
             onlinkID = self.links[0].id
         elif not isinstance(onlinkID, str):
             raise ValueError("onlinkID must be of type <str>")
-        
 
-        p2 = makePacket_L2("ARP", self.id, MAC_BROADCAST, onlinkID, {"IP":targetIP})
+        # Make the frame
+        ARP = createARPHeader(1, self.id, self.getIP(), 0, targetIP)
+        p2 = makePacket_L2("ARP", self.id, MAC_BROADCAST, onlinkID, ARP)
         p = makePacket(p2)
-        #self.send(p, onlinkID)
         return p, onlinkID
 
     def handleARP(self, data):
@@ -56,10 +61,8 @@ class ARPHandler:
         :returns: The response packet, dict
         :returns: The linkID it should be sent out on, str
         """
-        # Update local ARP cache, regardless of match
-        self.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
         
-        # If an ip function hasnt been provided, then this device has no IP,
+        # If an ip function hasnt been provided to the class, then this device has no IP,
         # so it can ignore the ARP request
         if not self.getIP:
             if self.DEBUG:
@@ -69,31 +72,29 @@ class ARPHandler:
             return
 
         # Receiving an ARP Request
-        if data["L2"]["To"] == MAC_BROADCAST:
+        if data["L2"]["To"] == MAC_BROADCAST and data["L2"]["Data"]["OP"] == 1:
             
             # Do I have the IP requested?
-            if self.getIP(data["L2"]["FromLink"]) == data["L2"]["Data"]["IP"]:
+            if self.getIP(data["L2"]["FromLink"]) == data["L2"]["Data"]["TPA"]:
                 if self.DEBUG: print("(ARP)", self.id, "got ARP-Rq, sending ARP-Rp")
-                p2 = makePacket_L2("ARP", self.id, data["L2"]["From"]) # Resp has no data
+
+                ARP = createARPHeader(2, fr=self.id, frIP=self.getIP(), to=data["L2"]["Data"]["SHA"], toIP=data["L2"]["Data"]["SPA"])
+                p2 = makePacket_L2("ARP", self.id, data["L2"]["From"], data=ARP) # Resp has no data
                 p = makePacket(p2)
                 return p, data["L2"]["FromLink"]
         
         # Receiving an ARP Response
-        elif data["L2"]["To"] == self.id:
+        elif data["L2"]["To"] == self.id and data["L2"]["Data"]["OP"] == 2:
             if self.DEBUG: print("(ARP)", self.id, "got ARP Response, updating ARP cache")
             
-            # If two devices respond, the fastest one wins
-            # Also, don't send out two overlapping ARPs?
-            # ARP responses don't have IDs to multiplex so that's a user thing I guess
-            print(self.id, "my arp cache:", self.arp_cache)
-            for k, v in self.arp_cache.items():
-                if v == -1:
-                    self.arp_cache[k] = data["L2"]["From"]
-                    print(self.id, "updated cache for", k, "=", data["L2"]["From"])
-                    break
-            else:
-                # Happens because an IP was updated in the meantime, or never created at all
-                print("No empty IPs to update - inconsistency error!")
+            if data["L2"]["Data"]["SPA"] not in self.arp_cache:
+                # Produced if the IP that gets updated is not the one I requested originally
+                print("WARN: Got ARP response for a missing IP - did I request this?")
+
+            # Update the local ARP cache with the received data
+            # x.x.x.x = -H-123123123
+            self.arp_cache[data["L2"]["Data"]["SPA"]] = data["L2"]["From"]
+            print(self.id, "updated cache for", data["L2"]["Data"]["TPA"], "=", data["L2"]["From"])
 
         else:
             if self.DEBUG: genericIgnoreMessage("ARP", self.id, data["L2"]["From"])

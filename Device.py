@@ -176,19 +176,20 @@ class Device(ABC):
         if not isinstance(targetIP, str):
             raise ValueError("TargetIP must be string, given: " + str(targetIP) )
         if onLinkID: assert isinstance(onLinkID, str)
-
+        
+        # Internally:
+        # Establish targetIP as -1 and change it upon receiving an ARP response
         p, link = self.ARPHandler.sendARP(targetIP, onLinkID)
         self.send(p, link)
 
-        # If timeout, block for that many seconds waiting for the event
-        # representing a complete ARP transaction
+        # Here, check whether or not the target ip has been populated with an ID (MAC)
         now = time.time()
         if timeout:
             while (time.time() - now) < timeout:
-                if self.checkEvent("ARPRESPONSE"):
-                    self.deleteEvent("ARPRESPONSE")
+                if self.ARPHandler.arp_cache[targetIP] != -1:
+                    # ARP Response received!
                     return True
-                await asyncio.sleep(0)
+                await asyncio.sleep(0) # Bad practice? I dont know what im doing
         return False
             
 
@@ -200,9 +201,9 @@ class Device(ABC):
         """
         p, link = self.ARPHandler.handleARP(data)
         if p: self.send(p, link)
-        else:
-            # Fire an event
-            self.fireEvent("ARPRESPONSE")
+        #else:
+        #    # Fire an event
+        #    self.fireEvent("ARPRESPONSE")
 
     def send(self, data, onlinkID=None):
         #print("    ", self.id, "sending to", onlinkID)

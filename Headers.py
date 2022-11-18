@@ -108,6 +108,60 @@ def makePacket_L4_UDP(sp="", dp="", data="", length="", checksum=""):
         "Data":data
     }
 
+
+#https://www.rfc-editor.org/rfc/rfc6747
+#http://www.tcpipguide.com/free/t_ARPMessageFormat.htm
+"""
+
+Technically these are the fields this RFC defines,
+but I'll be cutting some of them out as they won't be used
+
+ARP RFC 6747
+ARP REQUEST PACKET FORMAT                       ARP RESPONSE FORMAT (same thing)
+0        7        15       23       31          0        7        15       23       31
++--------+--------+--------+--------+           +--------+--------+--------+--------+        
+|       HT        |        PT       |           |       HT        |        PT       |
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+|  HAL   |  PAL   |        OP       |           |  HAL   |  PAL   |        OP       |        
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+|         S_HA (bytes 0-3)          |           |         S_HA (bytes 0-3)          |        
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+| S_HA (bytes 4-5)|S_L32 (bytes 0-1)|           | S_HA (bytes 4-5)|S_L32 (bytes 0-1)|        
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+|S_L32 (bytes 2-3)|S_NID (bytes 0-1)|           |S_L32 (bytes 2-3)|S_NID (bytes 0-1)|        
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+|         S_NID (bytes 2-5)         |           |         S_NID (bytes 2-5)         |
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+|S_NID (bytes 6-7)| T_HA (bytes 0-1)|           |S_NID (bytes 6-7)| T_HA (bytes 0-1)|
++--------+--------+--------+--------+           +--------+--------+--------+--------+        
+|         T_HA (bytes 3-5)          |           |         T_HA (bytes 3-5)          |
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+|         T_L32 (bytes 0-3)         |           |         T_L32 (bytes 0-3)         |
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+|         T_NID (bytes 0-3)         |           |         T_NID (bytes 0-3)         |
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+|         T_NID (bytes 4-7)         |           |         T_NID (bytes 4-7)         |
++--------+--------+--------+--------+           +--------+--------+--------+--------+
+"""
+def createARPHeader(op, fr, frIP, to, toIP):
+    d = {
+        "HT":"Ethernet",
+        "PT":"IPv4", # We won't be using anything other than IPv4 for the time being
+        "HAL":6,
+        "PAL":4, # From http://www.tcpipguide.com/free/t_ARPMessageFormat.htm
+        "OP":op,
+        "SHA":fr,
+        "SPA":frIP,
+        "THA":to,
+        "TPA":toIP
+    }
+
+    #for option_name, option_value in options.items():
+    #    d[option_name] = option_value
+
+    return d
+
+
 """
 DHCP RFC 2131
 0                   1                   2                   3
