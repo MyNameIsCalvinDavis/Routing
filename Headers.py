@@ -41,6 +41,14 @@ def genericIgnoreMessage(inproto, ID, fr=None):
     if fr: s = "from " + fr
     print("("+inproto+")", ID, "ignoring data", s)
 
+def findInterfaceFromLinkID(ID, interfaces):
+    if not ID or not interfaces:
+        raise ValueError("ID or interfaces is None")
+    for interface in interfaces:
+        if interface.linkid == ID:
+            return interface
+    else:
+        raise ValueError("Could not find interface from linkID:" + ID)
 
 
 def makePacket(L2="", L3="", L4="", L5="", L6="", L7=""):

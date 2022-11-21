@@ -57,15 +57,18 @@ class L2Device(Device):
         """
         for device in connectedTo:
             link = Link([self, device])
-            if not link in self.links:
-                #print("    ", self.id, "appending", link.id, "to my links")
-                self.links.append(link)
-            if not link in device.links:
-                #print("    ", self.id, "appending", link.id, "to", device.id, "links")
-                device.links.append(link)
+            my_interface = Interface(link, "0.0.0.0")
+            your_interface = Interface(link, "0.0.0.0")
+            # Create my interface to you
+            if not my_interface in self.interfaces:
+                self.interfaces.append(my_interface)
+
+            # Also create your interface to me
+            if not your_interface in device.interfaces:
+                device.interfaces.append(your_interface)
                 if isinstance(device, L3Device):
-                    device.setIP("0.0.0.0", link.id)
-                    device._associateIPsToLinks() # Possibly in need of a lock
+                    #device.setIP("0.0.0.0", link.id)
+                    device._associateIPsToInterfaces() # Possibly in need of a lock
 
 
 
@@ -99,13 +102,16 @@ class Switch(L2Device):
             if self.DEBUG: print(self.id, "Found", data["L2"]["To"], "in switch table")
             # Grab the link ID associated with the TO field (in the switch table),
             # then get the link object from that ID
-            self.send(data, self.switch_table[ data["L2"]["To"] ])
+            for interface in self.interfaces:
+                if self.switch_table[ data["L2"]["To"] ] == interface.linkid:
+                    self.send(data, interface)
+                    break
 
         else: # Flood every interface with the request
             if self.DEBUG: print(self.id, "flooding")
-            for link in self.links:
-                if link.id != data["L2"]["FromLink"]: # Dont send back on the same link
-                    self.send(data, link.id)
+            for interface in self.interfaces:
+                if interface.linkid != data["L2"]["FromLink"]: # Dont send back on the same link
+                    self.send(data, interface)
 
 class Link:
     """ Connects two devices """
@@ -113,6 +119,16 @@ class Link:
         self.id = "[L]" + str(random.randint(10000, 99999999))
         self.dl = dl
 
+class Interface:
+    def __init__(self, link=None, ip=None):
+        self.id = "_I_" + str(random.randint(10000, 99999999))
+        self.link = link
+        self.linkid = link.id
+        self.ip = ip
+    def __str__(self):
+        return "(" + self.id + ":" + self.ip + ")"
+    def __repr__(self):
+        return "(" + self.id + ":" + self.ip + ")"
 
 
 

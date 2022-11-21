@@ -10,6 +10,7 @@ from Headers import *
 from Debug import Debug
 from DHCP import DHCPServerHandler, DHCPClientHandler
 from ARP import ARPHandler
+import L2
 import pprint
 
 random.seed(123)
@@ -61,7 +62,7 @@ class Device(ABC):
         
         if ID: self.id = ID
         else: self.id = "___" + str(random.randint(10000, 99999999))
-        self.links = []
+        self.interfaces = []
 
         # To be used as a recipient for send(), read by listen()
         self.listen_buffer = []
@@ -77,7 +78,7 @@ class Device(ABC):
         self._initConnections(connectedTo)
 
         # ARP
-        self.ARPHandler = ARPHandler(self.id, self.links, self.DEBUG)
+        self.ARPHandler = ARPHandler(self.id, self.interfaces, self.DEBUG)
         
         def async_listen_start():
             asyncio.run(self.listen())
@@ -137,7 +138,7 @@ class Device(ABC):
     @abstractmethod
     def _initConnections(self, connectedTo):
         """
-        Should populate self.links and the links in connectedTo's Devices with
+        Should populate self.interfaces and the interfaces in connectedTo's Devices with
         a Link object representing a single connection, from self Device
 
         :param connectedTo: A list of Devices
@@ -155,18 +156,18 @@ class Device(ABC):
 
     def __str__(self):
         s = "\n" + self.id + "\n"
-        for item in self.links:
+        for item in self.interfaces:
             s += "  " + item.id + "\n"
             if isinstance(item, Link):
                 for sub_item in item.dl:
                     s += "    " + sub_item.id + "\n"
             else:
-                for sub_item in item.links:
+                for sub_item in item.interfaces:
                     s += "    " + sub_item.id + "\n"
             
         return s 
     
-    async def sendARP(self, targetIP, onLinkID=None, timeout=5):
+    async def sendARP(self, targetIP, oninterface=None, timeout=5):
         """
         Send an ARP request to another device on the same subnet
         
@@ -175,12 +176,13 @@ class Device(ABC):
         """
         if not isinstance(targetIP, str):
             raise ValueError("TargetIP must be string, given: " + str(targetIP) )
-        if onLinkID: assert isinstance(onLinkID, str)
+        # TODO Assert oninterface isinstance
+        #if onLinkID: assert isinstance(onLinkID, str)
         
         # Internally:
         # Establish targetIP as -1 and change it upon receiving an ARP response
-        p, link = self.ARPHandler.sendARP(targetIP, onLinkID)
-        self.send(p, link)
+        p, interface = self.ARPHandler.sendARP(targetIP, oninterface)
+        self.send(p, interface)
 
         # Here, check whether or not the target ip has been populated with an ID (MAC)
         now = time.time()
@@ -199,13 +201,14 @@ class Device(ABC):
 
         :param data: See `Headers.makePacket()`, dict
         """
-        p, link = self.ARPHandler.handleARP(data)
-        if p: self.send(p, link)
+        p, interface = self.ARPHandler.handleARP(data)
+
+        if p: self.send(p, interface)
         #else:
         #    # Fire an event
         #    self.fireEvent("ARPRESPONSE")
 
-    def send(self, data, onlinkID=None):
+    def send(self, data, oninterface=None):
         #print("    ", self.id, "sending to", onlinkID)
         """
         Send data on a link.
@@ -220,11 +223,11 @@ class Device(ABC):
         """
         
         assert isinstance(data, dict)
-        if onlinkID:
-            assert isinstance(onlinkID, str)
-            assert "[L]" in onlinkID
-        if onlinkID == None:
-            onlinkID = self.links[0].id
+        if oninterface:
+            assert isinstance(oninterface, L2.Interface)
+            assert "_I_" in oninterface.id
+        if oninterface == None:
+            oninterface = self.interfaces[0]
 
         # Is data in the right format?
         for k, v in data.items():
@@ -237,9 +240,11 @@ class Device(ABC):
         # This 26 character line represents at least 6 hours of my day
         data = copy.deepcopy(data)
 
-        data["L2"]["FromLink"] = onlinkID
+        #onlinkID = self.getInterfaceFromID(oninterfaceID).linkid
+        data["L2"]["FromLink"] = oninterface.linkid
 
-        end = self.getOtherDeviceOnInterface(onlinkID)
+        end = self.getOtherDeviceOnInterface(oninterface.linkid)
+
         if self.DEBUG:
             Debug(self.id, "==>", Debug.colorID(end.id), "via", Debug.color(data["L2"]["FromLink"], "ul"), 
                 color="green", f=self.__class__.__name__
@@ -264,6 +269,16 @@ class Device(ABC):
             return onlink.dl[1]
         else:
             return onlink.dl[0]
+    
+    def getInterfaceFromID(self, ID):
+        if not isinstance(ID, str): raise ValueError("ID must be of type <str>")
+        if not "_I_" in ID: raise ValueError("Provided ID " + ID + " not a link ID")
+        
+        for interface in self.interfaces:
+            if interface.id == ID:
+                return interface
+        else:
+            raise ValueError("LinkID " + ID + " not located in " + self.id + " interfaces")
 
     def getLinkFromID(self, ID):
         """
@@ -271,16 +286,20 @@ class Device(ABC):
             
         :returns: Link instance
         """
-
         if not isinstance(ID, str): raise ValueError("ID must be of type <str>")
         if not "[L]" in ID: raise ValueError("Provided ID " + ID + " not a link ID")
-
-        # First, check to see if that link is on this devices interfaces at all
-        ids = [x.id for x in self.links]
-        #print("    My links:", ids)
-        if not ID in ids:
+        
+        for interface in self.interfaces:
+            if interface.linkid == ID:
+                return interface.link
+        else:
             raise ValueError("LinkID " + ID + " not located in " + self.id + " interfaces")
 
-        for link in self.links:
-            if link.id == ID:
-                return link
+        ## First, check to see if that link is on this devices interfaces at all
+        #ids = [x.linkid for x in self.interfaces]
+        #if not ID in ids:
+        #    raise ValueError("LinkID " + ID + " not located in " + self.id + " interfaces")
+
+        #for interface in self.interfaces:
+        #    if interface.linkid == ID:
+        #        return interface.link

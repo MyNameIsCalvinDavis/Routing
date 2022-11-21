@@ -34,7 +34,7 @@ class L3Device(Device):
             self.nmasks.append(netmask)
         super().__init__(connectedTo, debug, ID) # L3Device
         
-        self.ARPHandler = ARPHandler(self.id, self.links, self.DEBUG, ipfunc=self.getIP)
+        self.ARPHandler = ARPHandler(self.id, self.interfaces, self.DEBUG, ipfunc=self.getIP)
         
     async def handleData(self, data):
         """
@@ -161,46 +161,82 @@ class L3Device(Device):
         """
         for device in connectedTo:
             link = Link([self, device])
-            if not link in self.links:
-                #self.ip = ("0.0.0.0", link.id)
-                self.setIP("0.0.0.0", link.id)
-                self.links.append(link)
-            if not link in device.links:
-                device.links.append(link)
+            my_interface = Interface(link, "0.0.0.0")
+            your_interface = Interface(link, "0.0.0.0")
+            if not my_interface in self.interfaces:
+                self.interfaces.append(my_interface)
+                #self.setIP("0.0.0.0", link.id)
+                #self.links.append(link)
+            if not your_interface in device.interfaces:
+                device.interfaces.append(your_interface)
+                #device.links.append(link)
                 if isinstance(device, L3Device):
-                    device.setIP("0.0.0.0", link.id)
-                    device._associateIPsToLinks() # Possibly in need of a lock
+                    #device.setIP("0.0.0.0", link.id)
+                    device._associateIPsToInterfaces() # Possibly in need of a lock
 
-        self._associateIPsToLinks()
+        self._associateIPsToInterfaces()
 
-    def _associateIPsToLinks(self):
+    def _associateIPsToInterfaces(self):
+        #"""
+        #Given self.links, associate each with the provided self.ips.
+        #If there are more links than IPs, each link gets associated
+        #with the default 0.0.0.0.
+        #"""
         """
-        Given self.links, associate each with the provided self.ips.
-        If there are more links than IPs, each link gets associated
-        with the default 0.0.0.0.
+        Associate all of our new Interfaces with the provided self.ips.
+        If there are more interfaces than IPs, each interface gets 0.0.0.0
         """
-        for i in range(len(self.links)):
+        #assert len(self.interfaces) >= len(self.ips)
+        for i in range(len(self.interfaces)):
             try:
-                self.linkid_to_ip[self.links[i].id] = self.ips[i]
-                #self.ip_to_linkid[self.ips[i]] = self.links[i].id
+                self.interfaces[i].ip = self.ips[i]      
             except IndexError:
-                self.linkid_to_ip[self.links[i].id] = "0.0.0.0"
-                #self.ip_to_linkid[self.ips[i]] = self.links[0]
+                self.interfaces[i].ip = "0.0.0.0"
                 self.ips.append("0.0.0.0")
+
+        #for i in range(len(self.links)):
+        #    try:
+        #        self.linkid_to_ip[self.interfaces[i].id] = self.ips[i]
+        #        #self.ip_to_linkid[self.ips[i]] = self.links[i].id
+        #    except IndexError:
+        #        self.linkid_to_ip[self.links[i].id] = "0.0.0.0"
+        #        #self.ip_to_linkid[self.ips[i]] = self.links[0]
+        #        self.ips.append("0.0.0.0")
     
-    def getIP(self, linkID=None):
+    def getIP(self, ID=None):
         """
-        Return the IP for linkID. By default, return the first link's IP, good
+        Return the IP for linkID or interfaceID. By default, return the first link's IP, good
         for single interface devices.
 
         :param linkID: optional, the ID of the desired link
         """
+        
+        # Default, no provided interface
+        if not ID:
+            ID = self.interfaces[0].id
+            for interface in self.interfaces:
+                if ID == interface.id:
+                    return interface.ip
+            else:
+                raise ValueError(self.id + " getIP did not find an ip for interface " + ID)
+        
+        # User provided an interface ID
+        elif "_I_" in ID:
+            for interface in self.interfaces:
+                if ID == interface.id:
+                    return interface.ip
+            else:
+                raise ValueError(self.id + " getIP did not find an ip for interface " + ID)
 
-        if not linkID: linkID = self.links[0].id
-        try: return self.linkid_to_ip[linkID]
-        except: return None # For devices with no IP
+        # User provided a link ID
+        elif "[L]" in ID:
+            for interface in self.interfaces:
+                if interface.linkid == ID:
+                    return interface.ip
+            else:
+                raise ValueError(self.id + " getIP did not find an ip for link " + ID)
 
-    def setIP(self, val, linkID=None):
+    def setIP(self, val, interfaceID=None):
         """
         Set the IP of a link. By default, set the first link's IP, good for
         single interface devices.
@@ -208,11 +244,23 @@ class L3Device(Device):
         :param val: The IP to set
         :param linkID: optional, the ID of the desired link
         """
-
+        
         assert isinstance(val, str)
-        if not linkID: linkID = self.links[0].id
-        self.linkid_to_ip[linkID] = val
-        #self.ip_to_linkid[val] = linkID
+        
+        if not interfaceID:
+            interfaceID = self.interfaces[0].id
+
+        for interface in self.interfaces:
+            if interfaceID == interface.id:
+                interface.ip = val
+                return True
+        else:
+            print(self.id, "setIP did not find an interface for", val, "interfaces:", self.interfaces)
+            raise
+
+        #if not linkID: linkID = self.links[0].id
+        #self.linkid_to_ip[linkID] = val
+        ##self.ip_to_linkid[val] = linkID
 
     
 
@@ -222,7 +270,7 @@ class Host(L3Device):
         super().__init__(ips, connectedTo, debug, self.id)
 
         # L3
-        self.DHCPClient = DHCPClientHandler(self.id, self.links, self.DEBUG)
+        self.DHCPClient = DHCPClientHandler(self.id, self.interfaces, self.DEBUG)
         #self.nmask = ""
         #self.gateway = ""
         #self.lease = (-1, -1) # (leaseTime, time (s) received the lease)
@@ -390,5 +438,6 @@ class DHCPServer(L3Device):
                 color="green", f=self.__class__.__name__
             )
         #print(self.id, "got DHCP from", data["L2"]["From"])
-        response, link = self.DHCPServerHandler.handleDHCP(data)
-        self.send(response, link)
+        response, linkID = self.DHCPServerHandler.handleDHCP(data)
+        interface = findInterfaceFromLinkID(linkID, self.interfaces)
+        self.send(response, interface)

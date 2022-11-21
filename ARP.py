@@ -1,11 +1,12 @@
 from Headers import *
 from Debug import *
 
+
 class ARPHandler:
-    def __init__(self, ID, links, debug=1, ipfunc=None):
+    def __init__(self, ID, interfaces, debug=1, ipfunc=None):
         self.DEBUG = debug
         self.id = ID
-        self.links = links
+        self.interfaces = interfaces
 
         # Used to identify an outgoing packet and its response,
         # and identify whether a sendX() has completed
@@ -24,7 +25,7 @@ class ARPHandler:
 
         self.arp_cache = {} # IP to MAC/ID 
 
-    def sendARP(self, targetIP, onlinkID=None):
+    def sendARP(self, targetIP, oninterface=None):
         """ 
         ARP Wrapper for self.send()
 
@@ -42,16 +43,17 @@ class ARPHandler:
             Debug(self.id, "sending ARP request to", targetIP,
                 color="green", f=self.__class__.__name__
             )
-        if onlinkID == None:
-            onlinkID = self.links[0].id
-        elif not isinstance(onlinkID, str):
-            raise ValueError("onlinkID must be of type <str>")
+        if oninterface == None:
+            oninterface = self.interfaces[0]
+        # TODO: Add isinstance for class Interface
+        #elif not isinstance(oninterface, str):
+        #    raise ValueError("oninterfaceID must be of type <str>")
 
         # Make the frame
         ARP = createARPHeader(1, self.id, self.getIP(), 0, targetIP)
-        p2 = makePacket_L2("ARP", self.id, MAC_BROADCAST, onlinkID, ARP)
+        p2 = makePacket_L2("ARP", self.id, MAC_BROADCAST, oninterface.linkid, ARP)
         p = makePacket(p2)
-        return p, onlinkID
+        return p, oninterface
 
     def handleARP(self, data):
         """ 
@@ -83,7 +85,8 @@ class ARPHandler:
                 ARP = createARPHeader(2, fr=self.id, frIP=self.getIP(), to=data["L2"]["Data"]["SHA"], toIP=data["L2"]["Data"]["SPA"])
                 p2 = makePacket_L2("ARP", self.id, data["L2"]["From"], data=ARP) # Resp has no data
                 p = makePacket(p2)
-                return p, data["L2"]["FromLink"]
+                interface = findInterfaceFromLinkID(data["L2"]["FromLink"], self.interfaces)
+                return p, interface
         
         # Receiving an ARP Response
         elif data["L2"]["To"] == self.id and data["L2"]["Data"]["OP"] == 2:

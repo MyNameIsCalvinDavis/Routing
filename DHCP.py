@@ -131,6 +131,10 @@ class DHCPServerHandler:
         if data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"]["options"][53] == 1:  
             # Send DHCP Offer
             clientip = self.generateIP()
+            if self.DEBUG: 
+                Debug(self.id, "received Discover from", data["L2"]["From"], ", sending offer", 
+                    color="green", f=self.__class__.__name__
+                )
 
             # Check clients requested options & satisfy them, if any
             requested_options = self.handleRequestedOptions( data )
@@ -172,10 +176,6 @@ class DHCPServerHandler:
 
             #if self.DEBUG: print("(DHCP)", self.id, "received Discover from", data["L2"]["From"])
             #if self.DEBUG: print("(DHCP)", self.id, "sending Offer to", data["L2"]["From"])
-            if self.DEBUG: 
-                Debug(self.id, "received Discover from", data["L2"]["From"], ", sending offer", 
-                    color="green", f=self.__class__.__name__
-                )
             if self.DEBUG == 2: print(p)
             return p, data["L2"]["FromLink"]
 
@@ -326,7 +326,8 @@ class DHCPClientHandler:
             p = makePacket(p2, p3, p4)
             
             # Send it out on the same link we received data on
-            return p, data["L2"]["FromLink"]
+            interface = findInterfaceFromLinkID(data["L2"]["FromLink"], self.interfaces)
+            return p, interface
 
         # Process A(CK)
         elif data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"]["options"][53] == 5 and data["L3"]["Data"]["xid"] == self.current_tx: 
@@ -357,7 +358,7 @@ class DHCPClientHandler:
         return None, None
 
     # Send D(iscover) or R(equest)
-    def sendDHCP(self, context, onLinkID=None):
+    def sendDHCP(self, context, oninterface=None):
         """
         Send (return) a DHCP Discover, or Request message.
 
@@ -366,8 +367,8 @@ class DHCPClientHandler:
         :returns: The response packet, dict
         :returns: The linkID it should be sent out on, str
         """
-        if onLinkID == None:
-            onLink = self.interfaces[0].id
+        if not oninterface:
+            oninterface = self.interfaces[0]
         
         # Send D(iscover)
         if context.lower() == "init":
@@ -389,11 +390,12 @@ class DHCPClientHandler:
             
             p4 = makePacket_L4_UDP(68, 67)
             p3 = makePacket_L3("0.0.0.0", "255.255.255.255", DHCP, "UDP") # MAC included
-            p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, onLinkID)
+            p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST, oninterface.linkid)
             p = makePacket(p2, p3, p4)
 
             self.current_tx = DHCP["xid"]
-            return p, onLinkID
+            #interface = findInterfaceFromLinkID(onLinkID, self.interfaces)
+            return p, oninterface
         
         # Send R(equest) renewal
         if context.lower() == "renew":
@@ -422,4 +424,5 @@ class DHCPClientHandler:
             p = makePacket(p2, p3, p4)
 
             self.current_tx = DHCP["xid"]
-            return p, onLinkID
+            interface = findInterfaceFromLinkID(onLinkID, self.interfaces)
+            return p, interface
