@@ -35,6 +35,9 @@ class Debug:
         for item in args:   
             if type(item) == type({}): # Printing a dict
                 text += Debug.color(item, Debug.getColor("white")) + " "
+            elif type(item) == type([]):
+                for i in item:
+                    text += Debug.color(i, Debug.getColor("white")) + " "
             elif item in Debug.ID_color_map: # Printing an ID
                 text += Debug.colorID(item) + Debug.getColor(color) + " "
             else:

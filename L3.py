@@ -364,7 +364,7 @@ class DHCPServer(L3Device):
 
         self.gateway = gateway
 
-        print("DHCP IP INIT:", self.ips[0], self.ips, self.nmasks)
+        #print("DHCP IP INIT:", self.ips[0], self.ips, self.nmasks)
         self.DHCPServerHandler = DHCPServerHandler(self.ips[0], self.nmasks[0], self.id, self.gateway, debug)
         
     async def _checkTimeouts(self):

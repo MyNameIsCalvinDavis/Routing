@@ -34,21 +34,10 @@ class DHCPServerHandler:
         self.nmask = nmask
 
         self.gateway = splitAddr(gateway)[0]
-        print("DHCP made gateway", self.gateway, "from", splitAddr(gateway), "original", gateway)
 
         if splitAddr(gateway)[1] != self.nmask:
             raise ValueError("Mask conflict between gateway", splitAddr(gateway), "and self", self.nmask)
 
-        # ipaddress doesn't like host bits
-        # so get rid of the host bits
-        
-        #range_from_ip = ip.split("/")[0].split(".")
-        #range_from_ip[-1] = "0"
-        #range_from_ip = ".".join(range_from_ip)
-        #
-        #print(self.ip, self.nmask, range_from_ip, removeHostBits(range_from_ip))
-        
-        print("IP",self.ip, "NM", self.nmask, "GW", gateway)
         
         if self.nmask == 0: raise
 
@@ -62,6 +51,10 @@ class DHCPServerHandler:
         self.id = haddr
         self.DEBUG = DEBUG
         
+        if self.DEBUG:
+            Debug(self.id, "Initialize gateway", ["IP:", self.ip, "NM:", self.nmask, "GW:", gateway],
+                color="blue", f=self.__class__.__name__
+            )
         # Keep track of states for ongoing client transactions,
         # client is deleted after DHCP ACK
         #self.client_msgtype = {}
