@@ -284,6 +284,9 @@ class DHCPClientHandler:
         self.DHCP_IP = ""
         self.current_tx = ""
 
+        # Not for the protocol
+        self.DHCP_FLAG = 0 # 0: No IP     1: Awaiting ACK     2: Received ACK & has active IP
+
     def handleDHCP(self, data):
         """
         Handle Offer / ACK, reply with Response. See `DHCPServerHandler.handleDHCP`.
@@ -334,7 +337,7 @@ class DHCPClientHandler:
 
         # Process A(CK)
         elif data["L3"]["Data"]["op"] == 2 and data["L3"]["Data"]["options"][53] == 5 and data["L3"]["Data"]["xid"] == self.current_tx: 
-            
+           
             if 1 in self.requested_options:
                 self.nmask = data["L3"]["Data"]["options"][1]
             if 3 in self.requested_options:
@@ -352,7 +355,10 @@ class DHCPClientHandler:
                     color="green", f=self.__class__.__name__
                 )
         else:
-            if self.DEBUG: genericIgnoreMessage("DHCP", data["L2"]["From"])
+            if self.DEBUG: 
+                Debug(self.id, "got a DHCP O or A that was incorrectly formatted, dropping",
+                    color="yellow", f=self.__class__.__name__
+                )
         
         # Upon receiving an ack, return nothing
         return None, None
@@ -371,7 +377,8 @@ class DHCPClientHandler:
             onLink = self.interfaces[0].id
         
         # Send D(iscover)
-        if context.lower() == "init": 
+        if context.lower() == "init":
+            self.DHCP_FLAG = 1
             if self.DEBUG:
                 Debug(self.id, "sending DHCP Discover", 
                     color="green", f=self.__class__.__name__
@@ -397,6 +404,7 @@ class DHCPClientHandler:
         
         # Send R(equest) renewal
         if context.lower() == "renew":
+            self.DHCP_FLAG = 1
             if self.DEBUG: 
                 Debug(self.id, "sending DHCP Request Renewal", Debug.color(self.DHCP_IP, "blue"), 
                     f=self.__class__.__name__

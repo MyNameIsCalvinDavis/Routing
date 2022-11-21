@@ -18,7 +18,7 @@ class L3Device(Device):
         :param ID: Optionally a child class can provide its ID to be used with inits of some Handler, like DHCP or ARP
         """
         self.linkid_to_ip = {} # For getting the IP on an interface
-        self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
+        #self.DHCP_FLAG = 0 # 0: No IP --- 1: Awaiting ACK --- 2: Received ACK & has active IP
 
         if isinstance(ips, str): ips = [ips]
 
@@ -230,20 +230,20 @@ class Host(L3Device):
     
     async def _checkTimeouts(self):
         # DHCP
-        try:
+        # Move this into the client handler
+        try: # TODO Clean up try
             if self.lease[0] >= 0:
                 self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-                if self.DEBUG == 2: 
+                if self.DHCPClient.DEBUG == 2: 
                     Debug(self.id, "===", self.lease_left, "/", self.lease[0], 
                         f=self.__class__.__name__
                     )
-                if self.lease_left <= 0.5 * self.lease[0] and self.DHCP_FLAG != 1:
-                    #if self.DEBUG: print("(DHCP)", self.id, "renewing ip", self.getIP())
+                if self.lease_left <= 0.5 * self.lease[0] and self.DHCPClient.DHCP_FLAG != 1:
                     if self.DEBUG: 
                         Debug(self.id, "renewing ip", self.getIP(), color="green", 
                             f=self.__class__.__name__
                         )
-                    self.DHCP_FLAG = 1
+                    self.DHCPClient.DHCP_FLAG = 1
                     #print("(DHCP)", self.id, "renewing IP", self.getIP())
                     await self.sendDHCP("Renew")
         except: pass
@@ -255,31 +255,30 @@ class Host(L3Device):
         # Probably: Another table of some sort
         # check internally if the table is set, or if I have an IP
         # IF i dont have an IP / something else, while loop
-
+        
+        # Internally:
+        # Have a flag set for what stage the DHCP client is on, see DHCPClientHandler.DHCP_FLAG
         p, link = self.DHCPClient.sendDHCP(context)
         self.send(p, link)
 
-        # If timeout, block for that many seconds waiting for the event
-        # representing a complete DHCP transaction
         now = time.time()
         if timeout:
             while (time.time() - now) < timeout:
-                if self.checkEvent("DHCP"):
-                    self.deleteEvent("DHCP")
+                if self.DHCPClient.DHCP_FLAG == 2:
+                    # IP received / renewed!
                     return True
-                await asyncio.sleep(0)
         return False
                 
     def handleDHCP(self, data):
         
-        p, link = self.DHCPClient.handleDHCP(data)
 
         if data["L3"]["Data"]["xid"] == self.DHCPClient.current_tx:
+            p, link = self.DHCPClient.handleDHCP(data)
             # On DORA ACK, no packet is returned to send out
             if p: 
                 self.send(p, link)
             else:
-                self.fireEvent("DHCP")
+                #self.fireEvent("DHCP")
 
                 # Extract all of the goodies
                 self.nmask = "255.255.255.255"
@@ -295,7 +294,7 @@ class Host(L3Device):
 
                 self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
                 self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-                self.DHCP_FLAG = 2
+                self.DHCPClient.DHCP_FLAG = 2
                 self.current_xid = -1
         else:
             if self.DEBUG: 
