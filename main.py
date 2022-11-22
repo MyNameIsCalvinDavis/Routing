@@ -18,7 +18,7 @@ async def main():
     await A.sendDHCP("init", timeout=5)
     await B.sendDHCP("init", timeout=5)
     #
-    #print("Bs IP: ", B.getIP())
+    pprint("Bs IP: ", B.getIP())
     ##await A.sendICMP(B.getIP())
 
     #A = Host(["1.1.1.1/24"], debug=2)

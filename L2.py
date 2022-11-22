@@ -47,7 +47,7 @@ class L2Device(Device):
         :param ID: Optionally a child class can provide its ID to be used with inits of some Handler, like DHCP or ARP
         """
         super().__init__(connectedTo, debug, ID)
-        self.itm = {}
+        #self.itm = {}
 
     def _initConnections(self, connectedTo):
         """
@@ -59,17 +59,16 @@ class L2Device(Device):
             link = Link([self, device])
             my_interface = Interface(link, "0.0.0.0")
             your_interface = Interface(link, "0.0.0.0")
+
             # Create my interface to you
             if not my_interface in self.interfaces:
                 self.interfaces.append(my_interface)
 
-            # Also create your interface to me
+            # Create your interface to me
             if not your_interface in device.interfaces:
                 device.interfaces.append(your_interface)
                 if isinstance(device, L3Device):
-                    #device.setIP("0.0.0.0", link.id)
                     device._associateIPsToInterfaces() # Possibly in need of a lock
-
 
 
 """
@@ -91,17 +90,12 @@ class Switch(L2Device):
     async def handleData(self, data):
         # Before evaluating, add incoming data to switch table
         self.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
-        #self.ARPHandler.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
 
-        #self.itm[data["L2"]["FromLink"]] = data["L2"]["From"]
-        #if self.DEBUG == 1: print(self.id, "Updated ARP table:", self.ARPHandler.mti)
-        
         # Switch table lookup
-        #if data["L2"]["To"] in self.ARPHandler.switch_table:
         if data["L2"]["To"] in self.switch_table:
             if self.DEBUG: print(self.id, "Found", data["L2"]["To"], "in switch table")
-            # Grab the link ID associated with the TO field (in the switch table),
-            # then get the link object from that ID
+            
+            # Find which interface to send out to, based on the To field
             for interface in self.interfaces:
                 if self.switch_table[ data["L2"]["To"] ] == interface.linkid:
                     self.send(data, interface)
@@ -120,7 +114,7 @@ class Link:
         self.dl = dl
 
 class Interface:
-    def __init__(self, link=None, ip=None):
+    def __init__(self, link, ip):
         self.id = "_I_" + str(random.randint(10000, 99999999))
         self.link = link
         self.linkid = link.id

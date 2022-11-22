@@ -16,21 +16,29 @@ import pprint
 random.seed(123)
 
 """
-Asyncio is being used to simulate sent packet timeouts. I could home
-bake this functionality without coroutines by having various flags
-and some framework or tuple format be respected, but that's another
-format on top of all the other ones here, and I'd rather not make myself
-and anyone else who uses this memorize or understand such a format.
+Asyncio is being used to simulate sent packet timeouts. One
+design decision was to make any sendX() function blocking, without
+also blocking the main thread. I do this because I want a sendX() function
+to wait until a response to that packet has been received, but not lock up
+the main thread while doing so.
 
-Instead we go with coroutines, where a timeout is sending out
-a packet and calling `await asyncio.sleep(n)` with n being the max
-timeout. If the data exists / was changed, we consider
-the send() a success, otherwise we consider the packet lost and
-retransmit / etc. I'm not yet sure how this will work with
-something like a TCP connection or a stream, if I get that far.
+Asyncio handles this problem by calling some sendX(), and then internally
+calling `await asyncio.sleep(0)` in a loop for T (timeout) seconds until some
+condition has been met. This condition is often a flag in the specific handler
+being changed as a result of a final packet, like a DHCP ACK, or an ARP Response
+flag. Looping like this also frees up the CPU to do other tasks while it waits
+asynchronously, meaning the function blocks, but the program does not.
 
-This ends up being a lot less code in the long run and is something I
-can wrap with a more user friendly timeout framework later
+This is a necessary design decision because in traditional multithreaded
+socket programming, you make a new thread to handle a single connection.
+Here, a single thread handles an entire device, and individual packets and
+frames instead. To avoid creating a million threads for every sent out
+packet or frame, we use asyncio.
+
+As a result, many of the functions here use the async modifier, not necessarily
+because they are designed to be asynchronous, but because they are another
+coroutine which can be jumped to following `await asyncio.sleep(0)` in a
+timeout loop somewhere.
 """
 
 # Abstract Base Class
@@ -39,7 +47,6 @@ class Device(ABC):
         """
         Base class which represents all devices. All Devices can:
             - Send ARP Requests and receive ARP responses
-            - Utilize DHCP Client functionality
             - Get information about the devices attached to them
         
         All Devices must:
@@ -67,46 +74,21 @@ class Device(ABC):
         # To be used as a recipient for send(), read by listen()
         self.listen_buffer = []
 
-        # To be used as an immutable history of all received data on this device
-        self.received_data = ()
-
-        self._events = set()
-
         self.lock = threading.Lock()
-
         self.thread_exit = False
         self._initConnections(connectedTo)
 
         # ARP
         self.ARPHandler = ARPHandler(self.id, self.interfaces, self.DEBUG)
         
+        # Asyncio requires silly nonsense when paired with threading
         def async_listen_start():
             asyncio.run(self.listen())
 
         # Start the listening thread on this device
-        #self.lthread = threading.Thread(target=self.listen, args=())
         self.lthread = threading.Thread(target=async_listen_start, args=())
         self.lthread.start()
 
-    def fireEvent(self, *args):
-        # Events are fired when things happen, whatever they may be.
-        # We let the user define events arbitrarily, without a specific format,
-        # such that they may create and listen for their own events
-        
-        if args in self._events:
-            raise ValueError("Cannot add duplicate event, " + str(args) + " already in events")
-        else:
-            self._events.add(args)
-
-    def deleteEvent(self, *args):
-        # After checking for an event and finding it, you should delete it
-        self._events.remove(args)
-
-    def checkEvent(self, *args):
-        if args in self._events:
-            return True
-        return False
-    
     def __del__(self):
         # If this object falls out of scope, safely terminate the running thread
         # Without leveraging multiprocessing or pkill, we can't kill it directly (unsafely)
@@ -115,7 +97,6 @@ class Device(ABC):
     async def listen(self):
         while True:
             if self.thread_exit: return
-            #time.sleep(self.listen_delay)
             await asyncio.sleep(self.listen_delay)
             await self._checkTimeouts()
             if self.listen_buffer:
@@ -133,13 +114,19 @@ class Device(ABC):
     
     @abstractmethod
     async def handleData(self, data):
+        """
+        Should be prepared to handle incoming data on whatever layer and process
+        it accordingly. Ex: A switch should handle (or redirect) ARP-related data,
+        but can probably normally forward anything above L3.
+        """
         raise NotImplementedError("Must override this method in the child class")
 
     @abstractmethod
     def _initConnections(self, connectedTo):
         """
-        Should populate self.interfaces and the interfaces in connectedTo's Devices with
-        a Link object representing a single connection, from self Device
+        - Create a Link between me and every other_device in ConnectedTo
+        - Create an Interface with that Link, append to self.interfaces
+        - Create another Interface with that Link, append to other_device.interfaces
 
         :param connectedTo: A list of Devices
         """
@@ -154,30 +141,17 @@ class Device(ABC):
         """
         raise NotImplementedError("Must override this method in the child class")
 
-    def __str__(self):
-        s = "\n" + self.id + "\n"
-        for item in self.interfaces:
-            s += "  " + item.id + "\n"
-            if isinstance(item, Link):
-                for sub_item in item.dl:
-                    s += "    " + sub_item.id + "\n"
-            else:
-                for sub_item in item.interfaces:
-                    s += "    " + sub_item.id + "\n"
-            
-        return s 
-    
     async def sendARP(self, targetIP, oninterface=None, timeout=5):
         """
-        Send an ARP request to another device on the same subnet
+        Send an ARP request to another device on the same subnet. By default,
+        send out this request on the first interface.
         
-        :param targetID: id parameter of target device
-        :param onLinkID: optional, id parameter of link to be send out on
+        :param targetIP: IP of target device
+        :param oninterface: optional, the interface object to send the request on
         """
         if not isinstance(targetIP, str):
             raise ValueError("TargetIP must be string, given: " + str(targetIP) )
         # TODO Assert oninterface isinstance
-        #if onLinkID: assert isinstance(onLinkID, str)
         
         # Internally:
         # Establish targetIP as -1 and change it upon receiving an ARP response
@@ -271,6 +245,11 @@ class Device(ABC):
             return onlink.dl[0]
     
     def getInterfaceFromID(self, ID):
+        """
+        Given an Interface ID, return its instance
+
+        :returns: Interface
+        """
         if not isinstance(ID, str): raise ValueError("ID must be of type <str>")
         if not "_I_" in ID: raise ValueError("Provided ID " + ID + " not a link ID")
         
@@ -282,9 +261,9 @@ class Device(ABC):
 
     def getLinkFromID(self, ID):
         """
-        Given a Link ID, return its Link instance
+        Given a Link ID, return its instance
             
-        :returns: Link instance
+        :returns: Link
         """
         if not isinstance(ID, str): raise ValueError("ID must be of type <str>")
         if not "[L]" in ID: raise ValueError("Provided ID " + ID + " not a link ID")
@@ -294,12 +273,3 @@ class Device(ABC):
                 return interface.link
         else:
             raise ValueError("LinkID " + ID + " not located in " + self.id + " interfaces")
-
-        ## First, check to see if that link is on this devices interfaces at all
-        #ids = [x.linkid for x in self.interfaces]
-        #if not ID in ids:
-        #    raise ValueError("LinkID " + ID + " not located in " + self.id + " interfaces")
-
-        #for interface in self.interfaces:
-        #    if interface.linkid == ID:
-        #        return interface.link

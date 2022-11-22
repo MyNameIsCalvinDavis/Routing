@@ -24,14 +24,15 @@ class DHCPServerHandler:
     """
     Handles DHCP Discovery / Request / Renewal
     """
-    def __init__(self, ip, nmask, haddr, gateway, DEBUG):
+    def __init__(self, ip, nmask, haddr, gateway, DEBUG, interfaces):
         """
         :param ip: DHCP Server IP, str
         :param nmask: Netmask of the served subnet, str
         """
-        nmask = str(nmask)
+        self.interfaces = interfaces
+
         self.ip = ip
-        self.nmask = nmask
+        self.nmask = str(nmask)
 
         self.gateway = splitAddr(gateway)[0]
 
@@ -177,7 +178,8 @@ class DHCPServerHandler:
             #if self.DEBUG: print("(DHCP)", self.id, "received Discover from", data["L2"]["From"])
             #if self.DEBUG: print("(DHCP)", self.id, "sending Offer to", data["L2"]["From"])
             if self.DEBUG == 2: print(p)
-            return p, data["L2"]["FromLink"]
+            interface = findInterfaceFromLinkID(data["L2"]["FromLink"], self.interfaces)
+            return p, interface
 
         # Process R(equest)
         elif data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"]["options"][53] == 3:
@@ -243,7 +245,8 @@ class DHCPServerHandler:
                 combo = data["L2"]["From"] + yiaddr
                 self.leased_ips[yiaddr] = (combo, self.lease_offer, time.time())
 
-            return p, data["L2"]["FromLink"]
+            interface = findInterfaceFromLinkID(data["L2"]["FromLink"], self.interfaces)
+            return p, interface
 
         else:
             if self.DEBUG:
