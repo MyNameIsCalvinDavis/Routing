@@ -1,12 +1,11 @@
 # Routing
 
-The purpose of this project is to provide a network simulation framework up to Layer 4. Several classes are provided, mimicking their hardware equivalents:
- - Device (Abstract Base Class)
+The purpose of this project is to provide a network simulation framework up to Layer 4. Several classes are provided, mimicking their hardware equivalents.
  - Switch
  - Host
  - Router
- - Link
- - DHCP Client / Server
+
+At this point, the two supported protocols are ARP and DHCP.
 
 In our simulation, we are able to connect a topology together in an intuitive way. Here we form a basic 4 device LAN:
 
@@ -15,13 +14,29 @@ In our simulation, we are able to connect a topology together in an intuitive wa
 We can initialize it as such:
 
 ```python
-A, B, C = Host(), Host(), Host()
-S1 = Switch([A, B, C])
+A = Host(["1.1.1.2/24"])
+B = Host(["1.1.1.3/24"])
+S1 = Switch([A, B])
+await A.sendARP(B.getIP())
+```
+<img src="Images/ARP.png">
+
+Optionally, Devices don't need an initial IP:
+
+```python
+A = Host()
+D1 = DHCPServer("1.1.1.2/24", gateway="1.1.1.1/24", debug=1)
+S1 = Switch([A, D1], debug=0)
+
+await A.sendDHCP("init", timeout=5)
+time.sleep(1)
+pprint("As IP: ", A.getIP())
 ```
 
-Devices can then speak to each other as expected, via a dict representation of packed frames. In our example, host A sends an ARP request looking for host B. We must pack the frame ourselves, though some of the data can be inferred, and of course you can wrap this functionality:
+<img src="Images/DHCP.png">
+
+Devices communicate to each other with a frame, although this project uses a dict representation instead of packed byte data. Each layer must be built separately, though we wrap this functionality with functions like sendARP() or sendDHCP() for example, as seen above. Under the hood, a frame might look like:
 ```python
->>> # The provided Device.sendARP() method abstracts this process
 >>> p = makePacket_L2(ethertype="ARP", fr=A.id, to=MAC_BROADCAST, data={"ID":B.id})
 >>> p
 {
@@ -32,28 +47,18 @@ Devices can then speak to each other as expected, via a dict representation of p
   "Data": {"ID": <B MAC>}
 }
 ```
+Where the Data field would then store L3 information, whose Data field would contain L4 information...
 
-When we send() data, we don't send TO a host, rather we output on a link. We then rely on the frame and other hardware to get it where it needs to go. Importantly, the Interface class is mostly just a wrapper around a dictionary, representing a Device's Link:IP assocation, and is uninvolved in the send() process. This may change in the future.
+When we send() data, we don't send TO a host, rather we output on an interface. Every Device has a list of Interfaces. We then rely on the frame and other hardware to get it where it needs to go.
 
-Here, we send p on A's only link.
-
-```python
->>> A.send(p) # onlink param default value is self.links[0]. Fine for a host with only one interface
-```
-
-We can also specify a specific link, good for devices with several links, like a Router or Switch:
+Here, we send p on A's only interface.
 
 ```python
->>> A.send(p, A.links[0])
+>>> A.send(p) # onlink param default value is self.interfaces[0]. Fine for a host with only one interface
 ```
 
-We can see the updated ARP caches of several of the devices, in the form of:
-```
-<Device ID>:<Link ID>
-```
+We can also specify a specific interface, good for devices with several interfaces, like a Router or Switch:
+
 ```python
->>> A.mti # MAC to Interface
->>> {'-H-54669064': '[L]71977819'}
->>> S1.mti
->>> {'-H-35937021': '[L]71977819', '-H-54669064': '[L]75483140'}
+>>> A.send(p, A.interfaces[0])
 ```
