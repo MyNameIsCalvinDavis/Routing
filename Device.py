@@ -10,6 +10,7 @@ from Headers import *
 from Debug import Debug
 from DHCP import DHCPServerHandler, DHCPClientHandler
 from ARP import ARPHandler
+from ICMP import ICMPHandler
 import L2
 import pprint
 
@@ -79,7 +80,7 @@ class Device(ABC):
         self._initConnections(connectedTo)
 
         # ARP
-        self.ARPHandler = ARPHandler(self.id, self.interfaces, self.DEBUG)
+        #self.ARPHandler = ARPHandler(self.id, self.interfaces, self.DEBUG)
         
         # Asyncio requires silly nonsense when paired with threading
         def async_listen_start():
@@ -144,6 +145,7 @@ class Device(ABC):
         raise NotImplementedError("Must override this method in the child class")
 
     async def sendARP(self, targetIP, oninterface=None, timeout=5):
+        print(self.id + " sending ARP to " + targetIP)
         """
         Send an ARP request to another device on the same subnet. By default,
         send out this request on the first interface.
@@ -151,35 +153,42 @@ class Device(ABC):
         :param targetIP: IP of target device
         :param oninterface: optional, the interface object to send the request on
         """
+        
+        if not oninterface:
+            oninterface = self.interfaces[0]
+
         if not isinstance(targetIP, str):
             raise ValueError("TargetIP must be string, given: " + str(targetIP) )
-        # TODO Assert oninterface isinstance
         
         # Internally:
         # Establish targetIP as -1 and change it upon receiving an ARP response
-        p, interface = self.ARPHandler.sendARP(targetIP, oninterface)
-        self.send(p, interface)
+        print(self.id + str(self.interfaces))
+        p = oninterface.ARPHandler.sendARP(targetIP)
+        self.send(p, oninterface)
 
         # Here, check whether or not the target ip has been populated with an ID (MAC)
         now = time.time()
         if timeout:
             while (time.time() - now) < timeout:
-                if self.ARPHandler.arp_cache[targetIP] != -1:
+                if oninterface.ARPHandler.arp_cache[targetIP] != -1:
                     # ARP Response received!
-                    return True
+                    return oninterface.ARPHandler.arp_cache[targetIP]
                 await asyncio.sleep(0) # Bad practice? I dont know what im doing
         return False
             
 
-    async def handleARP(self, data):
+    async def handleARP(self, data, oninterface=None):
         """
         Handle incoming ARP data
 
         :param data: See `Headers.makePacket()`, dict
         """
-        p, interface = self.ARPHandler.handleARP(data)
+        if not oninterface:
+            oninterface = self.interfaces[0]
 
-        if p: self.send(p, interface)
+        p = oninterface.ARPHandler.handleARP(data)
+
+        if p: self.send(p, oninterface)
         #else:
         #    # Fire an event
         #    self.fireEvent("ARPRESPONSE")

@@ -264,16 +264,22 @@ Checksum            Checksum
 Identifier          Code to aid in matching echos and replies
 Seq Number          Same as Identifier? TODO
 """
-def createICMPHeader(typ, code=0, identifier=random.randint(0, 999999),
-                     snum=random.randint(0, 999999)): # Only echo requests / replies, we ignore the rest
+def createICMPHeader(typ, code=0, identifier=None, snum=None): # Only echo requests / replies, we ignore the rest
+
+    if not identifier:
+        identifier = random.randint(0, 999999)
+    if not snum:
+        snum = random.randint(0, 999999)
     """
     To form an echo reply message, the source and destination
     addresses are simply reversed, the type code changed to 0,
     and the checksum recomputed.
     """
     d = {
-        "type":typ,
-        "code":code,
-        "identifier":identifier,
-        "SNum":snum,
+        "type":int(typ),
+        "code":int(code),
+        "identifier":int(identifier),
+        "SNum":int(snum),
     }
+
+    return d

@@ -9,7 +9,7 @@ import random
 import ipaddress
 
 class L3Device(Device):
-    def __init__(self, ips=[], connectedTo=[], debug=1, ID=None): # L3Device
+    def __init__(self, ID=None, ips=[], connectedTo=[], debug=1): # L3Device
         """
         A Device that operates primarily on L3. This class defines a standard handleData()
         function to be expanded upon. At the moment, all L3 devices handle the same way.
@@ -19,21 +19,21 @@ class L3Device(Device):
         :param ID: Optionally a child class can provide its ID to be used with inits of some Handler, like DHCP or ARP
         """
         if isinstance(ips, str): ips = [ips]
-
-        self.ips = []
-        self.nmasks = []
-        self.cidr_nmasks = []
+        
+        self.ips = []               # 192.168.0.1
+        self.nmasks = []            # 255.255.255.0
+        self.cidr_nmasks = []       # 24
         for item in ips:
             l = item.split("/")
             self.ips.append(l[0])
             self.cidr_nmasks.append(l[1])
             netmask = '.'.join([str((0xffffffff << (32 - int(l[1])) >> i) & 0xff) for i in [24, 16, 8, 0]])
-
-            # TODO Use header func here
             self.nmasks.append(netmask)
+            
+            #networkIP = ip
+            #self.networks.append(ipaddress.IPv4Network(item, strict=False)
         super().__init__(connectedTo, debug, ID) # L3Device
         
-        self.ARPHandler = ARPHandler(self.id, self.interfaces, self.DEBUG, ipfunc=self.getIP)
         
     async def handleData(self, data, oninterface):
         """
@@ -42,12 +42,16 @@ class L3Device(Device):
         
         :param data: See `Headers.makePacket()`, dict
         """
+        
+        if not oninterface:
+            oninterface = self.interfaces[0]
+
         if data["L2"]["To"] not in [self.id, MAC_BROADCAST]: # L2 destination check
             print(self.id, "got L2 frame not for me, ignoring")
             return
 
         if data["L2"]["EtherType"] == "ARP": # L2 multiplexing
-            await self.handleARP(data)
+            await self.handleARP(data, oninterface)
         
         # ===================================================
 
@@ -56,8 +60,6 @@ class L3Device(Device):
             
             #if data["L3"]["DIP"] not in [self.getIP(data["L2"]["To"]), IP_BROADCAST]:
             if data["L3"]["DIP"] not in [oninterface.ip, IP_BROADCAST]:
-                print(self.getIP(data["L2"]["To"]))
-                print(data)
                 print(self.id, "ignoring data from", data["L3"]["SIP"])
                 return
             
@@ -68,7 +70,7 @@ class L3Device(Device):
 
                 # DHCP
                 if data["L4"]["DPort"] in [67, 68]: # L4 multiplexing
-                    self.handleDHCP(data, oninterface)
+                    await self.handleDHCP(data, oninterface)
                 # elif...
                 # elif...
                 # elif...
@@ -79,7 +81,7 @@ class L3Device(Device):
                         )
             
             elif data["L3"]["Protocol"] == "ICMP": # 1
-                await self.handleICMP(data)
+                await self.handleICMP(data, oninterface)
         else:
             if self.DEBUG: 
                 Debug(self.id, "ignoring", data["L2"]["From"], data["L2"]["EtherType"],
@@ -92,66 +94,57 @@ class L3Device(Device):
     async def _checkTimeouts(self):
         return
 
-    async def sendICMP(self, targetIP, onlinkID=None):
-
-        if not onlinkID:
-            onlinkID = self.links[0].id
-
-        try: self.gateway
-        except:
-            raise ValueError(self.id + " has no gateway; configure or use DHCP")
+    async def sendICMP(self, targetIP, oninterface=None, timeout=5):
         
+        if not oninterface:
+            oninterface = self.interfaces[0]
+        if not oninterface.gateway:
+            raise ValueError(self.id + " has no gateway; configure or use DHCP")
         if not self.getIP():
             raise ValueError(self.id + " has no IP; configure or use DHCP")
 
-        # We know that we have a gateway and an IP
-        # So construct a packet with ICMP stuff
-        
-        # L3: SIP: Me, DIP: targetIP, proto=ICMP
-        # L2: 
-            # If on the same subnet,
-                # If we have this IPs ID already, L2 to that device ID
-                # If not, ARP first (timeout) then L2 to the device ID
-            # If not
-                # If we have gateway ID: Send to gateway ID
-                # If not, ARP gateway (timeout), then send to gateway ID
-        
-        # For now, assume always on another subnet
-        # And always ARP the gateway
-        
-        #if targetIP not in self.ARPHandler.arp_cache:
-        #    # Send an ARP Request to the targetIP, blocking
-        #    x = await self.sendARP(targetIP)
-        
-        
-        # ARP the gateway
-        print("Sending ARP")
-        if await self.sendARP(self.gateway): # Success
-            p2 = makePacket_L2("IPv4", self.id, self.ARPHandler.arp_cache[self.gateway] )
-        else: # Failure
-            raise ValueError("ICMP Failed - no gateway")
-        
-        p3 = makePacket_L3(self.getIP(), targetIP, proto="ICMP")
-        p = makePacket(p2, p3)
+        if self.DEBUG:
+            Debug(self.id, "ARPing", targetIP, "for ICMP",
+                color="green", f=self.__class__.__name__
+            )
+        # Check to see if targetIP is in my subnet
+        if ipaddress.ip_address(targetIP) in ipaddress.IPv4Network(oninterface.ip + "/" + oninterface.nmask, strict=False):
+            if self.DEBUG == 2:   
+                Debug(self.id, "Found", targetIP, "in my network", "(" + oninterface.ip + "/" + oninterface.nmask + ")",
+                    color="green", f=self.__class__.__name__
+                )
 
-        # Send the ICMP packet to gateway
-        print(self.id, "sending ICMP to gateway @", self.gateway)
-        self.send(p, onlinkID)
+            targetID = await self.sendARP(targetIP)
+            if not targetID: # On failed ARP
+                raise ValueError(self.id + " ICMP Failed - could not reach " + targetIP)
+            
+            p = await oninterface.ICMPHandler.sendICMP(targetIP, targetID)
 
-        return
+            # Internally:
+            self.send(p, oninterface)
+        else:
+            print("Not in network :(")
+         
+
+        # Here, check whether or not the target ip has been populated with an ID (MAC)
+        #now = time.time()
+        #if timeout:
+        #    while (time.time() - now) < timeout:
+        #        if self.ARPHandler.arp_cache[targetIP] != -1:
+        #            # ARP Response received!
+        #            return self.ARPHandler.arp_cache[targetIP]
+        #        await asyncio.sleep(0) # Bad practice? I dont know what im doing
+        #return False
         
-    def handleICMP(self, data):
-        # Receive an ICMP packet
-        # For now, just fire it back
+    async def handleICMP(self, data, oninterface=None):
+        if not oninterface:
+            oninterface = self.interfaces[0]
         
-        print(self.id, "got ICMP data from", data["L2"]["From"])
-        return
-        #p3 = makePacket_L3(self.data["L3"]["DIP"], data["L3"]["SIP"], proto="ICMP")
-        #p2 = makePacket_L2("IPv4", self.id, MAC_BROADCAST)
-        #p = makePacket(p2, p3, p4)
+        # We'll only ever get a request, and for now we don't care about its data
+        p = await oninterface.ICMPHandler.handleICMP(data)
 
-        #self.send(p, data["L2"]["FromLink"]
-
+        if p: # Got a request
+            self.send(p, oninterface)
 
     def _initConnections(self, connectedTo):
         """
@@ -166,14 +159,18 @@ class L3Device(Device):
             my_interface = Interface(link, "0.0.0.0")
             your_interface = Interface(link, "0.0.0.0")
             
-            my_interface.DHCPClient = DHCPClientHandler(self.id, debug=1)
+            my_interface.DHCPClient = DHCPClientHandler(self.id, debug=self.DEBUG)
+            my_interface.ICMPHandler = ICMPHandler(self.id, link.id, "0.0.0.0", None, debug=self.DEBUG)
+            my_interface.ARPHandler = ARPHandler(self.id, link.id, "0.0.0.0", debug=self.DEBUG)
 
             if not my_interface in self.interfaces:
                 self.interfaces.append(my_interface)
             if not your_interface in device.interfaces:
                 device.interfaces.append(your_interface)
                 if isinstance(device, L3Device):
-                    your_interface.DHCPClient = DHCPClientHandler(device.id, debug=1)
+                    your_interface.DHCPClient = DHCPClientHandler(device.id, link.id, debug=self.DEBUG)
+                    your_interface.ICMPHandler = ICMPHandler(device.id, link.id, "0.0.0.0", None, debug=self.DEBUG)
+                    your_interface.ARPHandler = ARPHandler(device.id, link.id, "0.0.0.0", debug=self.DEBUG)
                     device._associateIPsToInterfaces() # Possibly in need of a lock
 
         self._associateIPsToInterfaces()
@@ -185,10 +182,19 @@ class L3Device(Device):
         """
         for i in range(len(self.interfaces)):
             try:
-                self.interfaces[i].ip = self.ips[i]      
+                self.interfaces[i].ip = self.ips[i]
+                self.interfaces[i].nmask = self.nmasks[i]
+                self.interfaces[i].ICMPHandler.ip = self.ips[i]
+                self.interfaces[i].ICMPHandler.nmask = self.nmasks[i]
+                self.interfaces[i].ARPHandler.ip = self.ips[i]
             except IndexError:
                 self.interfaces[i].ip = "0.0.0.0"
+                self.interfaces[i].nmask = None
+                self.interfaces[i].ICMPHandler.ip = "0.0.0.0"
+                self.interfaces[i].ICMPHandler.nmask = None
+                self.interfaces[i].ARPHandler.ip = "0.0.0.0"
                 self.ips.append("0.0.0.0")
+                self.nmasks.append(None)
 
     def getIP(self, ID=None):
         """
@@ -224,7 +230,7 @@ class L3Device(Device):
     def setIP(self, val, interface=None):
         """
         Set the IP of an interface. By default, set the first link's IP, good for
-        single interface devices.
+        single interface devices. Also update the internal handler IPs of the interface.
         
         :param val: The IP to set
         :param linkID: optional, the ID of the desired link
@@ -237,6 +243,9 @@ class L3Device(Device):
             interface = self.interfaces[0]
         
         interface.ip = val
+        interface.ICMPHandler.ip = val
+        interface.ARPHandler.ip = val
+        interface.DHCPClient.ip = val
         #for i in self.interfaces:
         #    if interface.id == i.id:
         #        interface.ip = val
@@ -249,7 +258,7 @@ class L3Device(Device):
 class Host(L3Device):
     def __init__(self, ips=[], connectedTo=[], debug=1):
         self.id = "-H-" + str(random.randint(10000, 99999999))
-        super().__init__(ips, connectedTo, debug, self.id)
+        super().__init__(self.id, ips, connectedTo, debug)
 
     async def _checkTimeouts(self):
 

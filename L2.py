@@ -3,9 +3,8 @@ import time
 import threading
 import os, sys
 from Debug import *
-from Device import Device
-from L2 import *
-from L3 import *
+from Device import *
+from L3 import L3Device
 
 import asyncio
 """
@@ -54,6 +53,7 @@ class L2Device(Device):
 
         :param connectedTo: A list of Devices
         """
+
         for device in connectedTo:
             link = Link([self, device])
             my_interface = Interface(link, "0.0.0.0", self.id)
@@ -67,6 +67,9 @@ class L2Device(Device):
             if not your_interface in device.interfaces:
                 device.interfaces.append(your_interface)
                 if isinstance(device, L3Device):
+                    your_interface.DHCPClient = DHCPClientHandler(device.id, link.id, debug=1)
+                    your_interface.ICMPHandler = ICMPHandler(device.id, link.id, "0.0.0.0", None, debug=1)
+                    your_interface.ARPHandler = ARPHandler(device.id, link.id, "0.0.0.0", debug=1)
                     device._associateIPsToInterfaces() # Possibly in need of a lock
 
 """
@@ -120,7 +123,9 @@ class Interface:
         self.linkid = link.id
         self.ip = ip
 
-        self.DHCPClient = DHCPClientHandler(parentID, self.linkid)
+        self.DHCPClient = None
+        self.ARPHandler = None
+        self.ICMPHandler = None
 
         # Will also have gateway / nmask, and anything else important per interface
         self.gateway = ""
