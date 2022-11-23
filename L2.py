@@ -47,7 +47,6 @@ class L2Device(Device):
         :param ID: Optionally a child class can provide its ID to be used with inits of some Handler, like DHCP or ARP
         """
         super().__init__(connectedTo, debug, ID)
-        #self.itm = {}
 
     def _initConnections(self, connectedTo):
         """
@@ -57,8 +56,8 @@ class L2Device(Device):
         """
         for device in connectedTo:
             link = Link([self, device])
-            my_interface = Interface(link, "0.0.0.0")
-            your_interface = Interface(link, "0.0.0.0")
+            my_interface = Interface(link, "0.0.0.0", self.id)
+            your_interface = Interface(link, "0.0.0.0", device.id)
 
             # Create my interface to you
             if not my_interface in self.interfaces:
@@ -69,7 +68,6 @@ class L2Device(Device):
                 device.interfaces.append(your_interface)
                 if isinstance(device, L3Device):
                     device._associateIPsToInterfaces() # Possibly in need of a lock
-
 
 """
 TODO: A static IP host doesn't know where the gateway is
@@ -87,7 +85,9 @@ class Switch(L2Device):
         return
 
     # TODO: Dynamic ARP inspection for DHCP packets (DHCP snooping)
-    async def handleData(self, data):
+    async def handleData(self, data, oninterface):
+        # In this case a Switch does not care about which interface it came in on
+
         # Before evaluating, add incoming data to switch table
         self.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
 
@@ -114,11 +114,21 @@ class Link:
         self.dl = dl
 
 class Interface:
-    def __init__(self, link, ip):
+    def __init__(self, link, ip, parentID):
         self.id = "_I_" + str(random.randint(10000, 99999999))
         self.link = link
         self.linkid = link.id
         self.ip = ip
+
+        self.DHCPClient = DHCPClientHandler(parentID, self.linkid)
+
+        # Will also have gateway / nmask, and anything else important per interface
+        self.gateway = ""
+        self.nmask = ""
+        # Note: This information may or may not conflict with whatever is in self.DHCPClient.
+        # If this interface was configured with DHCP, they will be the same
+        # If not, then the DHCPClient contains defualt into and should not be referred to
+
     def __str__(self):
         return "(" + self.id + ":" + self.ip + ")"
     def __repr__(self):

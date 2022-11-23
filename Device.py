@@ -101,6 +101,8 @@ class Device(ABC):
             await self._checkTimeouts()
             if self.listen_buffer:
                 data = self.listen_buffer.pop(0)
+                # Grab the interface it came in on
+                interface = findInterfaceFromLinkID(data["L2"]["FromLink"], self.interfaces)
                 if self.DEBUG == 1: 
                     Debug(self.id, "got data from", Debug.colorID(self.getOtherDeviceOnInterface(data["L2"]["FromLink"]).id), 
                         color="green", f=self.__class__.__name__
@@ -110,10 +112,10 @@ class Device(ABC):
                         data, 
                         color="blue", f=self.__class__.__name__
                     )
-                await self.handleData(data)
+                await self.handleData(data, interface)
     
     @abstractmethod
-    async def handleData(self, data):
+    async def handleData(self, data, oninterface):
         """
         Should be prepared to handle incoming data on whatever layer and process
         it accordingly. Ex: A switch should handle (or redirect) ARP-related data,

@@ -35,7 +35,7 @@ class L3Device(Device):
         
         self.ARPHandler = ARPHandler(self.id, self.interfaces, self.DEBUG, ipfunc=self.getIP)
         
-    async def handleData(self, data):
+    async def handleData(self, data, oninterface):
         """
         Handle data as a L3 device would. All this does is read the L2/L3 information
         and forward the data to the correct handler, depending on port / ethertype / etc
@@ -53,7 +53,11 @@ class L3Device(Device):
 
         elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
             
-            if data["L3"]["DIP"] not in [self.getIP(data["L2"]["To"]), IP_BROADCAST]:
+            
+            #if data["L3"]["DIP"] not in [self.getIP(data["L2"]["To"]), IP_BROADCAST]:
+            if data["L3"]["DIP"] not in [oninterface.ip, IP_BROADCAST]:
+                print(self.getIP(data["L2"]["To"]))
+                print(data)
                 print(self.id, "ignoring data from", data["L3"]["SIP"])
                 return
             
@@ -64,7 +68,7 @@ class L3Device(Device):
 
                 # DHCP
                 if data["L4"]["DPort"] in [67, 68]: # L4 multiplexing
-                    self.handleDHCP(data)
+                    self.handleDHCP(data, oninterface)
                 # elif...
                 # elif...
                 # elif...
@@ -161,11 +165,15 @@ class L3Device(Device):
             link = Link([self, device])
             my_interface = Interface(link, "0.0.0.0")
             your_interface = Interface(link, "0.0.0.0")
+            
+            my_interface.DHCPClient = DHCPClientHandler(self.id, debug=1)
+
             if not my_interface in self.interfaces:
                 self.interfaces.append(my_interface)
             if not your_interface in device.interfaces:
                 device.interfaces.append(your_interface)
                 if isinstance(device, L3Device):
+                    your_interface.DHCPClient = DHCPClientHandler(device.id, debug=1)
                     device._associateIPsToInterfaces() # Possibly in need of a lock
 
         self._associateIPsToInterfaces()
@@ -210,6 +218,9 @@ class L3Device(Device):
             else:
                 raise ValueError(self.id + " getIP did not find an ip for link " + ID)
 
+        else:
+            raise ValueError(self.id + " Can only pass in LinkIDs or interfaceIDs to getIP, not " + ID)
+
     def setIP(self, val, interface=None):
         """
         Set the IP of an interface. By default, set the first link's IP, good for
@@ -224,14 +235,15 @@ class L3Device(Device):
         
         if not interface:
             interface = self.interfaces[0]
-
-        for i in self.interfaces:
-            if interface.id == i.id:
-                interface.ip = val
-                return True
-        else:
-            print(self.id, "setIP did not find an interface for", val, "interfaces:", self.interfaces)
-            raise
+        
+        interface.ip = val
+        #for i in self.interfaces:
+        #    if interface.id == i.id:
+        #        interface.ip = val
+        #        return True
+        #else:
+        #    print(self.id, "setIP did not find an interface for", val, "interfaces:", self.interfaces)
+        #    raise
 
 # TODO: Associate DHCP info (lease, mask, gateway, etc) per interface instead of per device
 class Host(L3Device):
@@ -239,69 +251,69 @@ class Host(L3Device):
         self.id = "-H-" + str(random.randint(10000, 99999999))
         super().__init__(ips, connectedTo, debug, self.id)
 
-        # L3
-        self.DHCPClient = DHCPClientHandler(self.id, self.interfaces, self.DEBUG)
-
     async def _checkTimeouts(self):
+
         # DHCP
-        # Move this into the client handler
         try: # TODO Clean up try
-            if self.lease[0] >= 0:
-                self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-                if self.DHCPClient.DEBUG == 2: 
-                    Debug(self.id, "===", self.lease_left, "/", self.lease[0], 
-                        f=self.__class__.__name__
-                    )
-                if self.lease_left <= 0.5 * self.lease[0] and self.DHCPClient.DHCP_FLAG != 1:
-                    if self.DEBUG: 
-                        Debug(self.id, "renewing ip", self.getIP(), color="green", 
+            for interface in self.interfaces:
+                if interface.DHCPClient.lease[0] >= 0:
+                    interface.DHCPClient.lease_left = (interface.DHCPClient.lease[0] + interface.DHCPClient.lease[1]) - int(time.time())
+                    if self.DEBUG == 2: 
+                        Debug(self.id, "===", interface.DHCPClient.lease_left, "/", interface.DHCPClient.lease[0], 
                             f=self.__class__.__name__
                         )
-                    self.DHCPClient.DHCP_FLAG = 1
-                    #print("(DHCP)", self.id, "renewing IP", self.getIP())
-                    await self.sendDHCP("Renew")
+                    if interface.DHCPClient.lease_left <= 0.5 * interface.DHCPClient.lease[0] and interface.DHCPClient.DHCP_FLAG != 1:
+                        if self.DEBUG: 
+                            Debug(self.id, "renewing ip", self.getIP(), color="green", 
+                                f=self.__class__.__name__
+                            )
+                        interface.DHCPClient.DHCP_FLAG = 1
+                        await self.sendDHCP("Renew")
         except: pass
         return 
                 
     ## Send D(iscover) or R(equest)
-    async def sendDHCP(self, context, onlink=None, timeout=5):
+    async def sendDHCP(self, context, oninterface=None, timeout=5):
         # Internally:
         # Have a flag set for what stage the DHCP client is on, see DHCPClientHandler.DHCP_FLAG
-        p, interface = self.DHCPClient.sendDHCP(context)
-        self.send(p, interface)
+        if not oninterface:
+            oninterface = self.interfaces[0]
+            
+        p = oninterface.DHCPClient.sendDHCP(context)
+        self.send(p, oninterface)
 
         now = time.time()
         if timeout:
             while (time.time() - now) < timeout:
-                if self.DHCPClient.DHCP_FLAG == 2:
+                if oninterface.DHCPClient.DHCP_FLAG == 2:
                     # IP received / renewed!
                     return True
         return False
                 
-    def handleDHCP(self, data):
-        if data["L3"]["Data"]["xid"] == self.DHCPClient.current_tx:
-            p, interface = self.DHCPClient.handleDHCP(data)
+    def handleDHCP(self, data, oninterface):
+        # Get interface for the incoming data
+        
+        if data["L3"]["Data"]["xid"] == oninterface.DHCPClient.current_tx:
+            p = oninterface.DHCPClient.handleDHCP(data, oninterface)
             # On DORA ACK, no packet is returned to send out
             if p: 
-                self.send(p, interface)
+                self.send(p, oninterface)
             else:
                 # Extract all of the goodies
-                self.nmask = "255.255.255.255"
-                self.gateway = ""
+                oninterface.nmask = "255.255.255.255"
+                oninterface.gateway = ""
 
                 if 1 in data["L3"]["Data"]["options"]:
-                    self.nmask = data["L3"]["Data"]["options"][1]
+                    oninterface.nmask = data["L3"]["Data"]["options"][1]
                 if 3 in data["L3"]["Data"]["options"]:
-                    self.gateway = data["L3"]["Data"]["options"][3]
+                    oninterface.gateway = data["L3"]["Data"]["options"][3]
 
-                #self.ip = data["L3"]["Data"]["yiaddr"]
-                interface = findInterfaceFromLinkID(data["L2"]["FromLink"], self.interfaces)
-                self.setIP(data["L3"]["Data"]["yiaddr"], interface)
+                self.setIP(data["L3"]["Data"]["yiaddr"], oninterface)
 
-                self.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
-                self.lease_left = (self.lease[0] + self.lease[1]) - int(time.time())
-                self.DHCPClient.DHCP_FLAG = 2
-                self.current_xid = -1
+                oninterface.DHCPClient.lease = (data["L3"]["Data"]["options"][51], int(time.time()) )
+                oninterface.DHCPClient.lease_left = (oninterface.DHCPClient.lease[0] + oninterface.DHCPClient.lease[1]) - int(time.time())
+                oninterface.DHCPClient.DHCP_FLAG = 2
+                oninterface.DHCPClient.current_xid = -1
         else:
             if self.DEBUG: 
                 Debug(self.id, "ignoring DHCP from", data["L2"]["From"], 
@@ -324,7 +336,7 @@ class Router(L3Device):
         for index, item in enumerate(ips):
             self.routing_table[item] = self.links[index]
 
-    async def handleData(self, data):
+    async def handleData(self, data, oninterface):
         """
         Unlike an L3 Device, a router doesn't usually respond to or interact with hosts
         directly, it just sends them to another network.
@@ -337,24 +349,7 @@ class Router(L3Device):
         
         # TODO Consider moving this code to the listener
         if data["L2"]["EtherType"] == "ARP": # L2 multiplexing
-            #self.handleARP(data)
             await self.handleARP(data)
-        
-            """
-            elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
-                
-                # I just got an IP packet
-                # Forward the packet to the respective link
-                # based on my routing table
-                # If I dont have that network, drop it and complain
-
-                # TODO: Default gateways
-
-                # IP should be in the form "x.x.x.x/y" or "x.x.x.x"
-                to_ip = data["L3"]["DIP"]
-                if ipaddress.ip_address(to_ip) in ipaddress.ip_network(to_ip, )
-                pass
-            """
         else:
             if self.DEBUG: 
                 Debug(self.id, "ignoring", data["L2"]["From"], data["L2"]["EtherType"],
@@ -375,7 +370,6 @@ class DHCPServer(L3Device):
         
     async def _checkTimeouts(self):
         # DHCP lease expiry check
-        # IP: (chaddr, lease_offer, lease_give_time)
         del_ips = []
         for k, v in self.DHCPServerHandler.leased_ips.items():
             time_left = (v[2] + v[1]) - int(time.time())
@@ -390,10 +384,10 @@ class DHCPServer(L3Device):
             for key in del_ips: del self.DHCPServerHandler.leased_ips[k]
             if self.DEBUG: print("(DHCP)", self.id, "deleted entries from lease table")
 
-    def handleDHCP(self, data):
+    def handleDHCP(self, data, oninterface):
         if self.DEBUG:
             Debug(self.id, "got DHCP from " + Debug.colorID(data["L2"]["From"]), 
                 color="green", f=self.__class__.__name__
             )
-        response, interface = self.DHCPServerHandler.handleDHCP(data)
-        self.send(response, interface)
+        response = self.DHCPServerHandler.handleDHCP(data, oninterface)
+        self.send(response, oninterface)
