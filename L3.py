@@ -29,9 +29,6 @@ class L3Device(Device):
             self.cidr_nmasks.append(l[1])
             netmask = '.'.join([str((0xffffffff << (32 - int(l[1])) >> i) & 0xff) for i in [24, 16, 8, 0]])
             self.nmasks.append(netmask)
-            
-            #networkIP = ip
-            #self.networks.append(ipaddress.IPv4Network(item, strict=False)
         super().__init__(connectedTo, debug, ID) # L3Device
         
         
@@ -119,22 +116,21 @@ class L3Device(Device):
                 raise ValueError(self.id + " ICMP Failed - could not reach " + targetIP)
             
             p = await oninterface.ICMPHandler.sendICMP(targetIP, targetID)
-
             # Internally:
             self.send(p, oninterface)
         else:
             print("Not in network :(")
          
-
         # Here, check whether or not the target ip has been populated with an ID (MAC)
-        #now = time.time()
-        #if timeout:
-        #    while (time.time() - now) < timeout:
-        #        if self.ARPHandler.arp_cache[targetIP] != -1:
-        #            # ARP Response received!
-        #            return self.ARPHandler.arp_cache[targetIP]
-        #        await asyncio.sleep(0) # Bad practice? I dont know what im doing
-        #return False
+        now = time.time()
+        if timeout:
+            while (time.time() - now) < timeout:
+                if oninterface.ICMPHandler.icmp_table[p["L3"]["Data"]["identifier"]]:
+                    # ICMP Response received!
+                    del oninterface.ICMPHandler.icmp_table[p["L3"]["Data"]["identifier"]]
+                    return True
+                await asyncio.sleep(0) # Bad practice? I dont know what im doing
+        return False
         
     async def handleICMP(self, data, oninterface=None):
         if not oninterface:

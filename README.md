@@ -5,7 +5,10 @@ The purpose of this project is to provide a network simulation framework up to L
  - Host
  - Router
 
-At this point, the two supported protocols are ARP and DHCP.
+At this point, supported protocols include:
+ - ARP
+ - DHCP
+ - ICMP
 
 In our simulation, we are able to connect a topology together in an intuitive way. Here we form a basic 4 device LAN:
 

@@ -11,16 +11,8 @@ class ICMPHandler:
         # function, which will manually update these variables
         self.ip = ip
         self.nmask = nmask
-
-        # Interesting problem - unlike other handlers, this one needs an updated IP and netmask
-        # so we pass in the interface itself here to grab those items, because the interface
-        # will be the single point of contact for updating the IP for whatever needs to use it
-
-        # A possible solution for this is to update everything manually in the
-        # setIP() function in L3Device, which does not maintain a single point of contact
-        # for the interface object but does for the function
-        #self.interface = interface
-
+        
+        # Used to keep track of outgoing ICMP connections
         self.icmp_table = {}
     
     async def sendICMP(self, targetIP, targetID):
@@ -31,6 +23,8 @@ class ICMPHandler:
         p2 = makePacket_L2("IPv4", self.id, targetID)
         p = makePacket(p2, p3)
 
+        self.icmp_table[ICMP["identifier"]] = False
+
         if self.DEBUG:
             Debug(self.id, "sending ICMP to", targetIP,
                 color="green", f=self.__class__.__name__
@@ -39,7 +33,7 @@ class ICMPHandler:
 
     async def handleICMP(self, data):
         if data["L3"]["Data"]["type"] == 8: # Got a request
-            ICMP = createICMPHeader(0)
+            ICMP = createICMPHeader(0, identifier=data["L3"]["Data"]["identifier"])
             p3 = makePacket_L3(data["L3"]["DIP"], data["L3"]["SIP"], proto="ICMP", data=ICMP)
             p2 = makePacket_L2("IPv4", self.id, data["L2"]["From"])
             p = makePacket(p2, p3)
@@ -52,6 +46,13 @@ class ICMPHandler:
             return p
 
         elif data["L3"]["Data"]["type"] == 0: # Got a reply
+            if data["L3"]["Data"]["identifier"] in self.icmp_table:
+                self.icmp_table[data["L3"]["Data"]["identifier"]] = True
+            else:
+                if self.DEBUG:
+                    Debug(self.id, data["L3"]["Data"]["identifier"], "not in ICMP table - did I send this request?",
+                        color="red", f=self.__class__.__name__
+                    )
             if self.DEBUG:
                 Debug(self.id, "Received ICMP packet from", data["L2"]["From"], ":", data["L3"]["SIP"], 
                     color="green", f=self.__class__.__name__

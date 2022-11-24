@@ -145,7 +145,6 @@ class Device(ABC):
         raise NotImplementedError("Must override this method in the child class")
 
     async def sendARP(self, targetIP, oninterface=None, timeout=5):
-        print(self.id + " sending ARP to " + targetIP)
         """
         Send an ARP request to another device on the same subnet. By default,
         send out this request on the first interface.
@@ -162,7 +161,6 @@ class Device(ABC):
         
         # Internally:
         # Establish targetIP as -1 and change it upon receiving an ARP response
-        print(self.id + str(self.interfaces))
         p = oninterface.ARPHandler.sendARP(targetIP)
         self.send(p, oninterface)
 
