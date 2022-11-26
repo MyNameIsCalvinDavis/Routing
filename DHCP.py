@@ -124,18 +124,18 @@ class DHCPServerHandler:
         :returns: The linkID it should be sent out on, str
         """
         
-        if self.DEBUG:
+        if self.DEBUG == 2:
             Debug(self.id, "My IP:", Debug.color(self.ip, "blue"), "=== Client IP:", Debug.color(data["L3"]["SIP"], "blue"), 
-                color="green", f=self.__class__.__name__ 
+                color="blue", f=self.__class__.__name__ 
             )
         # Process D(iscover) request
         if data["L3"]["Data"]["op"] == 1 and data["L3"]["Data"]["options"][53] == 1:  
             # Send DHCP Offer
-            clientip = self.generateIP()
             if self.DEBUG: 
                 Debug(self.id, "received Discover from", data["L2"]["From"], ", sending offer", 
                     color="green", f=self.__class__.__name__
                 )
+            clientip = self.generateIP()
 
             # Check clients requested options & satisfy them, if any
             requested_options = self.handleRequestedOptions( data )

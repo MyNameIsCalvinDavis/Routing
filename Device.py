@@ -7,12 +7,12 @@ import asyncio
 from abc import ABC, abstractmethod
 import copy
 from Headers import *
+from L1 import *
 from Debug import Debug
 from DHCP import DHCPServerHandler, DHCPClientHandler
 from ARP import ARPHandler
 from ICMP import ICMPHandler
-import L2
-import pprint
+import ipaddress
 
 random.seed(123)
 
@@ -59,6 +59,12 @@ class Device(ABC):
         :param debug: See below
         :param ID: Optionally a child class can provide its ID to be used with inits of some Handler, like DHCP or ARP
         """
+        assert type(connectedTo) == type([])
+        assert type(ID) == type("")
+
+        for i in connectedTo:
+            assert isinstance(i, Device)
+
 
         # Debug 0 : Show nothing
         # Debug 1 : Show who talks to who
@@ -213,7 +219,7 @@ class Device(ABC):
         
         assert isinstance(data, dict)
         if oninterface:
-            assert isinstance(oninterface, L2.Interface)
+            assert isinstance(oninterface, Interface)
             assert "_I_" in oninterface.id
         if oninterface == None:
             oninterface = self.interfaces[0]

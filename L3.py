@@ -1,12 +1,4 @@
 from Device import *
-from ARP import *
-from DHCP import *
-from Debug import Debug
-import L2
-from Headers import removeHostBits
-import asyncio
-import random
-import ipaddress
 
 class L3Device(Device):
     def __init__(self, ID=None, ips=[], connectedTo=[], debug=1): # L3Device
@@ -108,13 +100,13 @@ class L3Device(Device):
         if ipaddress.ip_address(targetIP) in ipaddress.IPv4Network(oninterface.ip + "/" + oninterface.nmask, strict=False):
             if self.DEBUG == 2:   
                 Debug(self.id, "Found", targetIP, "in my network", "(" + oninterface.ip + "/" + oninterface.nmask + ")",
-                    color="green", f=self.__class__.__name__
+                    color="blue", f=self.__class__.__name__
                 )
             
             # If we don't know the target's ID/MAC, ARP it
             if not targetIP in oninterface.ARPHandler.arp_cache:
                 if self.DEBUG:   
-                    Debug(self.id, targetIP, "not in local ARP cache, sending ARP",
+                    Debug(self.id, targetIP, "(same subnet) not in local ARP cache, sending ARP",
                         color="yellow", f=self.__class__.__name__
                     )
                 targetID = await self.sendARP(targetIP)
@@ -127,7 +119,10 @@ class L3Device(Device):
             p = await oninterface.ICMPHandler.sendICMP(targetIP, targetID)
             self.send(p, oninterface)
         else:
-            
+            if self.DEBUG == 2:   
+                Debug(self.id, targetIP, "not in my network (" + oninterface.ip + "/" + oninterface.nmask + ")",
+                    color="blue", f=self.__class__.__name__
+                )
             print("Not in network :(")
          
         # Here, check whether or not the target ip has been populated with an ID (MAC)
@@ -167,10 +162,10 @@ class L3Device(Device):
         """
         for device in connectedTo:
             link = Link([self, device])
-            my_interface = Interface(link, "0.0.0.0")
-            your_interface = Interface(link, "0.0.0.0")
+            my_interface = Interface(link, "0.0.0.0", self.id)
+            your_interface = Interface(link, "0.0.0.0", device.id)
             
-            my_interface.DHCPClient = DHCPClientHandler(self.id, debug=self.DEBUG)
+            my_interface.DHCPClient = DHCPClientHandler(self.id, link.id, debug=self.DEBUG)
             my_interface.ICMPHandler = ICMPHandler(self.id, link.id, "0.0.0.0", None, debug=self.DEBUG)
             my_interface.ARPHandler = ARPHandler(self.id, link.id, "0.0.0.0", debug=self.DEBUG)
 
@@ -247,7 +242,7 @@ class L3Device(Device):
         :param linkID: optional, the ID of the desired link
         """
         
-        assert isinstance(interface, L2.Interface)
+        assert isinstance(interface, Interface)
         assert isinstance(val, str)
         
         if not interface:
@@ -257,13 +252,6 @@ class L3Device(Device):
         interface.ICMPHandler.ip = val
         interface.ARPHandler.ip = val
         interface.DHCPClient.ip = val
-        #for i in self.interfaces:
-        #    if interface.id == i.id:
-        #        interface.ip = val
-        #        return True
-        #else:
-        #    print(self.id, "setIP did not find an interface for", val, "interfaces:", self.interfaces)
-        #    raise
 
 # TODO: Associate DHCP info (lease, mask, gateway, etc) per interface instead of per device
 class Host(L3Device):
@@ -316,7 +304,7 @@ class Host(L3Device):
             )
         return False
                 
-    def handleDHCP(self, data, oninterface):
+    async def handleDHCP(self, data, oninterface):
         # Get interface for the incoming data
         
         if data["L3"]["Data"]["xid"] == oninterface.DHCPClient.current_tx:
@@ -349,45 +337,33 @@ class Host(L3Device):
 class Router(L3Device):
     def __init__(self, ips, connectedTo=[], debug=1):
         self.id = "=R=" + str(random.randint(10000, 99999999))
-        super().__init__(ips, connectedTo, debug, self.id)
+        super().__init__(self.id, ips, connectedTo, debug)
         
         # After super(), we have:
         # ips [x.x.x.x/y, x.x.x.x/y]
         # self.ips [x.x.x.x, x.x.x.x]
         # self.nmasks [y, y]
-        # self.links [...]
+
+        assert len(ips) == len(connectedTo)
+
+        # Check to see if targetIP is in my subnet
+        #if ipaddress.ip_address(targetIP) in ipaddress.IPv4Network(oninterface.ip + "/" + oninterface.nmask, strict=False):
         
-        # Make a static routing table for ip/m:linkid association
+        # Make a static routing table for ip:interface association
         self.routing_table = {}
         for index, item in enumerate(ips):
-            self.routing_table[item] = self.links[index]
-
-    async def handleData(self, data, oninterface):
-        """
-        Unlike an L3 Device, a router doesn't usually respond to or interact with hosts
-        directly, it just sends them to another network.
-        
-        :param data: See `Headers.makePacket()`, dict
-        """
-        if data["L2"]["To"] not in [self.id, MAC_BROADCAST]: # L2 destination check
-            print(self.id, "got L2 frame, ignoring")
-            return
-        
-        # TODO Consider moving this code to the listener
-        if data["L2"]["EtherType"] == "ARP": # L2 multiplexing
-            await self.handleARP(data)
-        else:
-            if self.DEBUG: 
-                Debug(self.id, "ignoring", data["L2"]["From"], data["L2"]["EtherType"],
-                    color="yellow", f=self.__class__.__name__
-                )
-        
-        return
+            network_obj = ipaddress.IPv4Network(item, strict=False)
+            # no.exploded = "x.x.x.0/y"
+            # no.network_address.exploded = "x.x.x.0"
+            # no.prefixlen = 24
+            # no.netmask.exploded = "255.255.255.0"
+            self.routing_table[network_obj.exploded] = self.interfaces[index]
+    
 
 class DHCPServer(L3Device):
     def __init__(self, ips, gateway, connectedTo=[], debug=1): # DHCPServer
         self.id = "=DHCP=" + str(random.randint(10000, 99999999))
-        super().__init__(ips, connectedTo, debug, self.id) # DHCPServer
+        super().__init__(self.id, ips, connectedTo, debug) # DHCPServer
 
         # TODO: Move stuff to Interface class, including DHCP Server info?
         self.gateway = gateway
@@ -410,10 +386,10 @@ class DHCPServer(L3Device):
             for key in del_ips: del self.DHCPServerHandler.leased_ips[k]
             if self.DEBUG: print("(DHCP)", self.id, "deleted entries from lease table")
 
-    def handleDHCP(self, data, oninterface):
-        if self.DEBUG:
-            Debug(self.id, "got DHCP from " + Debug.colorID(data["L2"]["From"]), 
-                color="green", f=self.__class__.__name__
-            )
+    async def handleDHCP(self, data, oninterface):
+        #if self.DEBUG:
+        #    Debug(self.id, "got DHCP from " + Debug.colorID(data["L2"]["From"]), 
+        #        color="green", f=self.__class__.__name__
+        #    )
         response = self.DHCPServerHandler.handleDHCP(data, oninterface)
         self.send(response, oninterface)
