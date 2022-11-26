@@ -16,6 +16,7 @@ class ARPHandler:
         #else:
         #    self.getIP = None
 
+        # x.x.x.x = -H-123123123
         self.arp_cache = {} # IP to MAC/ID 
 
     def sendARP(self, targetIP):
@@ -30,7 +31,7 @@ class ARPHandler:
         
         # Set the IP to a missing value, to be checked later
         # once the response comes in
-        self.arp_cache[targetIP] = -1
+        self.arp_cache[targetIP] = False
         
         if self.DEBUG:
             Debug(self.id, "sending ARP request to", targetIP,
@@ -83,7 +84,7 @@ class ARPHandler:
         # Receiving an ARP Response
         elif data["L2"]["To"] == self.id and data["L2"]["Data"]["OP"] == 2:
             if self.DEBUG:
-                Debug(self.id, "updating ARP cache:", data["L2"]["Data"]["TPA"], "=", data["L2"]["From"],
+                Debug(self.id, "updating ARP cache:", data["L2"]["Data"]["SPA"], "=", data["L2"]["From"],
                     color="green", f=self.__class__.__name__
                 )
             

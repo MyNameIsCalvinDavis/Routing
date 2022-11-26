@@ -39,13 +39,17 @@ class ICMPHandler:
             p = makePacket(p2, p3)
             
             if self.DEBUG:
-                Debug(self.id, "got ICMP request, responding",
+                Debug(self.id, "Received ICMP request from", data["L3"]["SIP"], ", responding",
                     color="green", f=self.__class__.__name__
                 )
 
             return p
 
         elif data["L3"]["Data"]["type"] == 0: # Got a reply
+            if self.DEBUG:
+                Debug(self.id, "Received ICMP reply from", data["L3"]["SIP"], 
+                    color="green", f=self.__class__.__name__
+                )
             if data["L3"]["Data"]["identifier"] in self.icmp_table:
                 self.icmp_table[data["L3"]["Data"]["identifier"]] = True
             else:
@@ -53,10 +57,6 @@ class ICMPHandler:
                     Debug(self.id, data["L3"]["Data"]["identifier"], "not in ICMP table - did I send this request?",
                         color="red", f=self.__class__.__name__
                     )
-            if self.DEBUG:
-                Debug(self.id, "Received ICMP packet from", data["L2"]["From"], ":", data["L3"]["SIP"], 
-                    color="green", f=self.__class__.__name__
-                )
             return
         else:
             if self.DEBUG:

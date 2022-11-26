@@ -168,10 +168,16 @@ class Device(ABC):
         now = time.time()
         if timeout:
             while (time.time() - now) < timeout:
-                if oninterface.ARPHandler.arp_cache[targetIP] != -1:
+                if oninterface.ARPHandler.arp_cache[targetIP] != False:
                     # ARP Response received!
                     return oninterface.ARPHandler.arp_cache[targetIP]
                 await asyncio.sleep(0) # Bad practice? I dont know what im doing
+
+        if self.DEBUG:
+            Debug(self.id, "ARP timeout for", targetIP,
+                color="red", f=self.__class__.__name__
+            )
+        del oninterface.ARPHandler.arp_cache[targetIP]
         return False
             
 

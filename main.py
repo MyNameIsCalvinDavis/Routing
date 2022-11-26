@@ -33,6 +33,7 @@ async def ICMPTest_SameSubnet():
     A.interfaces[0].gateway="abc"
     B.interfaces[0].gateway="abc"
     await A.sendICMP(B.getIP())
+    await A.sendICMP(B.getIP())
 
 
 async def main():

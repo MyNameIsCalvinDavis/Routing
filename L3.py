@@ -99,26 +99,35 @@ class L3Device(Device):
             raise ValueError(self.id + " has no gateway; configure or use DHCP")
         if not self.getIP():
             raise ValueError(self.id + " has no IP; configure or use DHCP")
-
-        if self.DEBUG:
-            Debug(self.id, "ARPing", targetIP, "for ICMP",
+        if self.DEBUG:   
+            Debug(self.id, "Initialize sendICMP()",
                 color="green", f=self.__class__.__name__
             )
+
         # Check to see if targetIP is in my subnet
         if ipaddress.ip_address(targetIP) in ipaddress.IPv4Network(oninterface.ip + "/" + oninterface.nmask, strict=False):
             if self.DEBUG == 2:   
                 Debug(self.id, "Found", targetIP, "in my network", "(" + oninterface.ip + "/" + oninterface.nmask + ")",
                     color="green", f=self.__class__.__name__
                 )
+            
+            # If we don't know the target's ID/MAC, ARP it
+            if not targetIP in oninterface.ARPHandler.arp_cache:
+                if self.DEBUG:   
+                    Debug(self.id, targetIP, "not in local ARP cache, sending ARP",
+                        color="yellow", f=self.__class__.__name__
+                    )
+                targetID = await self.sendARP(targetIP)
 
-            targetID = await self.sendARP(targetIP)
-            if not targetID: # On failed ARP
-                raise ValueError(self.id + " ICMP Failed - could not reach " + targetIP)
+                if not targetID: # On failed ARP
+                    raise ValueError(self.id + " ICMP Failed - could not reach " + targetIP)
+            else:
+                targetID = oninterface.ARPHandler.arp_cache[targetIP]
             
             p = await oninterface.ICMPHandler.sendICMP(targetIP, targetID)
-            # Internally:
             self.send(p, oninterface)
         else:
+            
             print("Not in network :(")
          
         # Here, check whether or not the target ip has been populated with an ID (MAC)
@@ -130,6 +139,12 @@ class L3Device(Device):
                     del oninterface.ICMPHandler.icmp_table[p["L3"]["Data"]["identifier"]]
                     return True
                 await asyncio.sleep(0) # Bad practice? I dont know what im doing
+        
+        if self.DEBUG:
+            Debug(self.id, "ICMP timeout for", targetIP,
+                color="red", f=self.__class__.__name__
+            )
+        del oninterface.ICMPHandler.icmp_table[p["L3"]["Data"]["identifier"]]
         return False
         
     async def handleICMP(self, data, oninterface=None):
@@ -293,6 +308,12 @@ class Host(L3Device):
                 if oninterface.DHCPClient.DHCP_FLAG == 2:
                     # IP received / renewed!
                     return True
+
+
+        if self.DEBUG: 
+            Debug(self.id, "DHCP timeout",
+                color="red", f=self.__class__.__name__
+            )
         return False
                 
     def handleDHCP(self, data, oninterface):
