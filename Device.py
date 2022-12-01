@@ -69,7 +69,17 @@ class Device(ABC):
         # If this object falls out of scope, safely terminate the running thread
         # Without leveraging multiprocessing or pkill, we can't kill it directly (unsafely)
         self.thread_exit = True
-    
+
+    def __str__(self):
+        """
+        Quickly see a device's connected links / devices
+        """
+        s = self.id + "\n"
+        for interface in self.interfaces:
+            s += "    " + self.id + " ==> " + interface.linkid + " ==> " + self.getOtherDeviceOnInterface(interface.linkid).id + "\n"
+
+        return s
+
     def listen(self):
         while True:
             if self.thread_exit: return

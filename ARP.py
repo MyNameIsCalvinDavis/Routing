@@ -77,9 +77,9 @@ class ARPHandler:
                 p2 = makePacket_L2("ARP", self.id, data["L2"]["From"], data=ARP) # Resp has no data
                 p = makePacket(p2)
                 return p#, interface
-            else:
-                print(self.id, "I dont have the IP requested")
-                print(self.id, self.ip, data)
+            #else:
+            #    print(self.id, "I dont have the IP requested")
+            #    print(self.id, self.ip, data)
             
         
         # Receiving an ARP Response

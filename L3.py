@@ -450,11 +450,11 @@ class Router(L3Device):
                     drop packet
             """
 
-            #self.routing_table = sorted(self.routing_table, key=lambda x: ipaddress.ip_network(x[1], strict=False).prefixlen)
             self.routing_table = sorted(self.routing_table, key=lambda x: ipaddress.ip_network(x["dst"], strict=False).prefixlen)
             for route in self.routing_table:
                 dip = ipaddress.ip_address(data["L3"]["DIP"])
                 if dip in route["dst"]: # Found a match
+
                     if self.DEBUG == 2:
                         Debug(self.id, "found a matching path for", dip, "on route", route,
                             color = "blue", f=self.__class__.__name__
@@ -465,6 +465,10 @@ class Router(L3Device):
                         nextHopIP = data["L3"]["DIP"]
                     elif route["type"] == "S":
                         nextHopIP = route["nexthop"]
+                    elif route["type"] == "L":
+                        # Addressed to me directly
+                        #super().handleData()
+                        pass
 
                     # check if nextHopIP in arp cache
                     if nextHopIP in route["outgoing_interface"].ARPHandler.arp_cache:
