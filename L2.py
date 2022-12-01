@@ -15,6 +15,7 @@ class L2Device(Device):
         :param ID: Optionally a child class can provide its ID to be used with inits of some Handler, like DHCP or ARP
         """
         super().__init__(connectedTo, debug, ID)
+        self.lthread.start()
 
     def _initConnections(self, connectedTo):
         """
@@ -59,13 +60,12 @@ class Switch(L2Device):
 
         super().__init__(connectedTo, debug, self.id) # Switch
 
-    async def _checkTimeouts(self):
+    def _checkTimeouts(self):
         return
 
     # TODO: Dynamic ARP inspection for DHCP packets (DHCP snooping)
-    async def handleData(self, data, oninterface):
+    def handleData(self, data, oninterface):
         # In this case a Switch does not care about which interface it came in on
-
         # Before evaluating, add incoming data to switch table
         self.switch_table[data["L2"]["From"]] = data["L2"]["FromLink"]
 

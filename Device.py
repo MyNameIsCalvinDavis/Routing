@@ -2,7 +2,6 @@ import random
 import time
 import threading
 import os, sys
-import asyncio
 
 from abc import ABC, abstractmethod
 import copy
@@ -13,34 +12,9 @@ from DHCP import DHCPServerHandler, DHCPClientHandler
 from ARP import ARPHandler
 from ICMP import ICMPHandler
 import ipaddress
+import pprint
 
 random.seed(123)
-
-"""
-Asyncio is being used to simulate sent packet timeouts. One
-design decision was to make any sendX() function blocking, without
-also blocking the main thread. I do this because I want a sendX() function
-to wait until a response to that packet has been received, but not lock up
-the main thread while doing so.
-
-Asyncio handles this problem by calling some sendX(), and then internally
-calling `await asyncio.sleep(0)` in a loop for T (timeout) seconds until some
-condition has been met. This condition is often a flag in the specific handler
-being changed as a result of a final packet, like a DHCP ACK, or an ARP Response
-flag. Looping like this also frees up the CPU to do other tasks while it waits
-asynchronously, meaning the function blocks, but the program does not.
-
-This is a necessary design decision because in traditional multithreaded
-socket programming, you make a new thread to handle a single connection.
-Here, a single thread handles an entire device, and individual packets and
-frames instead. To avoid creating a million threads for every sent out
-packet or frame, we use asyncio.
-
-As a result, many of the functions here use the async modifier, not necessarily
-because they are designed to be asynchronous, but because they are another
-coroutine which can be jumped to following `await asyncio.sleep(0)` in a
-timeout loop somewhere.
-"""
 
 # Abstract Base Class
 class Device(ABC):
@@ -72,7 +46,7 @@ class Device(ABC):
         self.DEBUG = debug
 
         # For visualization purposes
-        self.listen_delay = 0.5
+        self.listen_delay = 0.25
         
         if ID: self.id = ID
         else: self.id = "___" + str(random.randint(10000, 99999999))
@@ -85,27 +59,22 @@ class Device(ABC):
         self.thread_exit = False
         self._initConnections(connectedTo)
 
-        # ARP
-        #self.ARPHandler = ARPHandler(self.id, self.interfaces, self.DEBUG)
-        
-        # Asyncio requires silly nonsense when paired with threading
-        def async_listen_start():
-            asyncio.run(self.listen())
+        self.lthread = threading.Thread(target=self.listen, args=())
 
-        # Start the listening thread on this device
-        self.lthread = threading.Thread(target=async_listen_start, args=())
-        self.lthread.start()
+        # Some devices need additional setup after the constructor,
+        # So we let child devices start the listening thread manually
+        #self.lthread.start()
 
     def __del__(self):
         # If this object falls out of scope, safely terminate the running thread
         # Without leveraging multiprocessing or pkill, we can't kill it directly (unsafely)
         self.thread_exit = True
     
-    async def listen(self):
+    def listen(self):
         while True:
             if self.thread_exit: return
-            await asyncio.sleep(self.listen_delay)
-            await self._checkTimeouts()
+            self._checkTimeouts()
+            time.sleep(self.listen_delay)
             if self.listen_buffer:
                 data = self.listen_buffer.pop(0)
                 # Grab the interface it came in on
@@ -119,10 +88,16 @@ class Device(ABC):
                         data, 
                         color="blue", f=self.__class__.__name__
                     )
-                await self.handleData(data, interface)
+
+                # Spawn a thread to handle this data
+
+                #self.handleData(data, interface)
+                x = threading.Thread(target=self.handleData, args=(data, interface))
+                x.start()
+
     
     @abstractmethod
-    async def handleData(self, data, oninterface):
+    def handleData(self, data, oninterface):
         """
         Should be prepared to handle incoming data on whatever layer and process
         it accordingly. Ex: A switch should handle (or redirect) ARP-related data,
@@ -143,14 +118,14 @@ class Device(ABC):
     
     # Some L2 devices won't have timeouts; too bad
     @abstractmethod   
-    async def _checkTimeouts(self):
+    def _checkTimeouts(self):
         """
         Should be executed periodically either by listen() or some other non-main thread,
         can be empty if a device has no periodic checks to make, but must be implemented.
         """
         raise NotImplementedError("Must override this method in the child class")
 
-    async def sendARP(self, targetIP, oninterface=None, timeout=5):
+    def sendARP(self, targetIP, oninterface=None, timeout=5, result=None):
         """
         Send an ARP request to another device on the same subnet. By default,
         send out this request on the first interface.
@@ -161,6 +136,8 @@ class Device(ABC):
         
         if not oninterface:
             oninterface = self.interfaces[0]
+        
+        assert isinstance(oninterface, Interface)
 
         if not isinstance(targetIP, str):
             raise ValueError("TargetIP must be string, given: " + str(targetIP) )
@@ -172,12 +149,14 @@ class Device(ABC):
 
         # Here, check whether or not the target ip has been populated with an ID (MAC)
         now = time.time()
+        b = 0
         if timeout:
             while (time.time() - now) < timeout:
                 if oninterface.ARPHandler.arp_cache[targetIP] != False:
                     # ARP Response received!
+                    if result:
+                        result[0] = oninterface.ARPHandler.arp_cache[targetIP]
                     return oninterface.ARPHandler.arp_cache[targetIP]
-                await asyncio.sleep(0) # Bad practice? I dont know what im doing
 
         if self.DEBUG:
             Debug(self.id, "ARP timeout for", targetIP,
@@ -187,24 +166,20 @@ class Device(ABC):
         return False
             
 
-    async def handleARP(self, data, oninterface=None):
+    def handleARP(self, data, oninterface=None):
         """
         Handle incoming ARP data
 
         :param data: See `Headers.makePacket()`, dict
         """
+
         if not oninterface:
             oninterface = self.interfaces[0]
-
+        
         p = oninterface.ARPHandler.handleARP(data)
-
         if p: self.send(p, oninterface)
-        #else:
-        #    # Fire an event
-        #    self.fireEvent("ARPRESPONSE")
 
     def send(self, data, oninterface=None):
-        #print("    ", self.id, "sending to", onlinkID)
         """
         Send data on a link.
         
@@ -244,11 +219,10 @@ class Device(ABC):
             Debug(self.id, "==>", Debug.colorID(end.id), "via", Debug.color(data["L2"]["FromLink"], "ul"), 
                 color="green", f=self.__class__.__name__
             )
-        #if self.DEBUG == 1: print(self.id + " ==> "+ end.id + " via "+ data["L2"]["FromLink"])
-
         self.lock.acquire()
         end.listen_buffer.append(data)
         self.lock.release()
+        return
 
     def getOtherDeviceOnInterface(self, onlinkID):
         """

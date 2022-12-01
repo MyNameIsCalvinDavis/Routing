@@ -15,9 +15,10 @@ class ICMPHandler:
         # Used to keep track of outgoing ICMP connections
         self.icmp_table = {}
     
-    async def sendICMP(self, targetIP, targetID):
+    def sendICMP(self, targetIP, targetID):
         # We take in targetID because we first ARP before calling this function,
         # and must construct the L2 frame
+
         ICMP = createICMPHeader(8)
         p3 = makePacket_L3(self.ip, targetIP, proto="ICMP", data=ICMP)
         p2 = makePacket_L2("IPv4", self.id, targetID)
@@ -31,7 +32,7 @@ class ICMPHandler:
             )
         return p
 
-    async def handleICMP(self, data):
+    def handleICMP(self, data):
         if data["L3"]["Data"]["type"] == 8: # Got a request
             ICMP = createICMPHeader(0, identifier=data["L3"]["Data"]["identifier"])
             p3 = makePacket_L3(data["L3"]["DIP"], data["L3"]["SIP"], proto="ICMP", data=ICMP)

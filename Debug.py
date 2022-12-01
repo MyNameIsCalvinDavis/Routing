@@ -54,7 +54,7 @@ class Debug:
             Debug.colorID( ID ),
             Debug.color( text, color )
         )
-        print(self.s)
+        print(self.s, flush=True)
     
     def __str__(self):
         return self.s
