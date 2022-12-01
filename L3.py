@@ -85,6 +85,14 @@ class L3Device(Device):
         return
 
     def sendICMP(self, targetIP, oninterface=None, timeout=5):
+        """
+        Wraps one of two processes: sendARP -> sendICMP, or just sendICMP
+        depending on contents of oninterface's arp cache. Timeout starts
+        once the ICMP packet is outbound, not when this function first starts.
+
+        If you want finer control over the timeout, ARP the targetIP before
+        calling this function.
+        """
         if not oninterface:
             oninterface = self.interfaces[0]
         if not oninterface.gateway:
@@ -96,42 +104,30 @@ class L3Device(Device):
                 color="green", f=self.__class__.__name__
             )
 
-
         # Grab the targetID:
         # - If on our subnet, grab the targetIP ID
         # - If not, grab the gateway ID
+        
+        # Is targetIP in my subnet?
         if ipaddress.ip_address(targetIP) in ipaddress.IPv4Network(oninterface.ip + "/" + oninterface.nmask, strict=False):
-            if targetIP in oninterface.ARPHandler.arp_cache:
-                targetID = oninterface.ARPHandler.arp_cache[targetIP]
-            else:
-                Debug(self.id, targetIP, "(same subnet) not in local ARP cache, sending ARP",
+            nextHopIP = targetIP
+        else: # It's not, so use the gateway
+            nextHopIP = oninterface.gateway.split("/")[0]
+        
+        # Is the nexthop in my arp cache?
+        if nextHopIP in oninterface.ARPHandler.arp_cache:
+            targetID = oninterface.ARPHandler.arp_cache[nextHopIP]
+        else: # ARP it
+            if self.DEBUG:
+                Debug(self.id, nextHopIP, "not in local ARP cache, sending ARP",
                     color="yellow", f=self.__class__.__name__
                 )
-
-                # Have a thread manage the ARP connection independent from this thread
-                targetID = [None]
-                x = threading.Thread(target=self.sendARP, args=(targetIP, oninterface), kwargs={"result":targetID})
-                x.start()
-                x.join() # Block and wait for the thread to finish
-                targetID = targetID[0]
-
-        else: # Not in subnet
-            if oninterface.gateway in oninterface.ARPHandler.arp_cache:
-                targetID = oninterface.ARPHandler.arp_cache[targetIP]
-            else:
-                Debug(self.id, targetIP, "(different subnet) not in local ARP cache, ARPing gateway", oninterface.gateway,
-                    color="yellow", f=self.__class__.__name__
-                )
-                gateway_ip = oninterface.gateway.split("/")[0]
-                #targetID = await self.sendARP(gateway_ip, oninterface)
-
-
-                # Have a thread manage the ARP connection independent from this thread
-                targetID = [None]
-                x = threading.Thread(target=self.sendARP, args=(gateway_ip, oninterface), kwargs={"result":targetID})
-                x.start()
-                x.join() # Block and wait for the thread to finish
-                targetID = targetID[0]
+            # Have a thread manage the ARP connection independent from this thread
+            targetID = [None]
+            x = threading.Thread(target=self.sendARP, args=(nextHopIP, oninterface), kwargs={"result":targetID})
+            x.start()
+            x.join() # Block and wait for the thread to finish
+            targetID = targetID[0]
 
         if not targetID: # On failed ARP
             Debug(self.id + " ICMP Failed - could not reach " + targetIP,
@@ -377,11 +373,20 @@ class Router(L3Device):
             dest_addr = ipaddress.ip_network(self.ips[index] + "/32")
             network_addr = ipaddress.ip_network(self.ips[index] + "/" + self.cidr_nmasks[index], strict=False)
 
-            routeL = ("L", dest_addr, self.interfaces[index])
-            routeC = ("C", network_addr, self.interfaces[index])
+            dL = {
+                "type":"L",
+                "dst":dest_addr,
+                "outgoing_interface":self.interfaces[index]
+            }
 
-            self.routing_table.append(routeL)
-            self.routing_table.append(routeC)
+            dC = {
+                "type":"C",
+                "dst":network_addr,
+                "outgoing_interface":self.interfaces[index]
+            }
+
+            self.routing_table.append(dL)
+            self.routing_table.append(dC)
 
         self.lthread.start()
     
@@ -393,9 +398,15 @@ class Router(L3Device):
         assert isinstance(route[1], str)
         assert isinstance(route[2], str)
         assert isinstance(route[3], Interface)
+
+        d = {
+            "type":route[0],
+            "dst":ip.ipaddress.IPv4Network(route[1], strict=False),
+            "nexthop":ip.ipaddress.IPv4Network(route[2], strict=False),
+            "outgoing_interface":route[3]
+        }   
         
-        data = ("S", ip.ipaddress.IPv4Network(route[1], strict=False), ip.ipaddress.IPv4Network(route[2], strict=False), route[3])
-        self.routing_table.append(data)
+        self.routing_table.append(d)
 
 
     def handleData(self, data, oninterface):
@@ -439,80 +450,52 @@ class Router(L3Device):
                     drop packet
             """
 
-            self.routing_table = sorted(self.routing_table, key=lambda x: ipaddress.ip_network(x[1], strict=False).prefixlen)
+            #self.routing_table = sorted(self.routing_table, key=lambda x: ipaddress.ip_network(x[1], strict=False).prefixlen)
+            self.routing_table = sorted(self.routing_table, key=lambda x: ipaddress.ip_network(x["dst"], strict=False).prefixlen)
             for route in self.routing_table:
                 dip = ipaddress.ip_address(data["L3"]["DIP"])
-                if dip in route[1]: # Found a match
+                if dip in route["dst"]: # Found a match
                     if self.DEBUG == 2:
                         Debug(self.id, "found a matching path for", dip, "on route", route,
                             color = "blue", f=self.__class__.__name__
                         )
+                    
+                    # ARP nexthop or dst, depending on route type
+                    if route["type"] == "C": 
+                        nextHopIP = data["L3"]["DIP"]
+                    elif route["type"] == "S":
+                        nextHopIP = route["nexthop"]
 
-                    if route[0] == "L": # Packet was send to me (router) directly
-                        pass
-                    elif route[0] == "C": # Packet is going to a directly connected network
-                        # ("C", DST_NTWK, Interface)
+                    # check if nextHopIP in arp cache
+                    if nextHopIP in route["outgoing_interface"].ARPHandler.arp_cache:
+                        nextHopID = route["outgoing_interface"].ARPHandler.arp_cache[nextHopIP]
+                    else: # ARP it
+                        nextHopID = [None]
+                        x = threading.Thread(target=self.sendARP, args=(data["L3"]["DIP"], route["outgoing_interface"]), kwargs={"result":nextHopID})
+                        x.start()
+                        x.join() # Block and wait for the thread to finish
+                        nextHopID = nextHopID[0]
+                     
+                    if not nextHopID:
+                        if self.DEBUG:
+                            Debug(self.id, "ARP failed to find nexthop ID, dropping packet",
+                                color = "red", f=self.__class__.__name__
+                           )
+                        
+                    # Now with the nexthop's IP and ID, send data to nexthop
+                    # But first reconstruct the L2 frame
+                    if self.DEBUG:
+                        Debug(self.id, "Forwarding packet to", nextHopID, "@", nextHopIP,
+                            color = "green", f=self.__class__.__name__
+                       )
 
-                        # Is the DIP in the outgoing interface's arp cache?
-                        if data["L3"]["DIP"] in route[2].ARPHandler.arp_cache: # If in my ARP cache, send
-                            data["L2"]["From"] = self.id
-                            data["L2"]["To"] = route[2].ARPHandler.arp_cache[ data["L3"]["DIP"] ]
-                            self.send(data, route[2])
+                    data["L2"]["From"] = self.id
+                    data["L2"]["To"] = nextHopID
 
-                        else: # Else ARP targetIP
-                            targetID = [None]
-                            x = threading.Thread(target=self.sendARP, args=(data["L3"]["DIP"], route[2]), kwargs={"result":targetID})
-                            x.start()
-                            x.join() # Block and wait for the thread to finish
-                            targetID = targetID[0]
 
-                            if targetID:
-                                data["L2"]["From"] = self.id
-                                data["L2"]["To"] = targetID
-                                if self.DEBUG:
-                                    Debug(self.id, "Forwarding ICMP packet to", data["L3"]["DIP"],
-                                        color = "green", f=self.__class__.__name__
-                                    )
-                                self.send(data, route[2])
-                                return True
-                            else:
-                                Debug(self.id, "ARP failed, dropping packet",
-                                    color="red", f=self.__class__.__name__    
-                                )
-                            return False
-                    """
-                    elif route[0] == "S": # Needs to be routed forward to nexthop
-                        #if data["L3"]["DIP"] in oninterface.arp_cache:
-                        if route[2] in oninterface.arp_cache:
-                            
-                            #p2 = makePacket_L2("IPv4", self.id, oninterface.arp_cache[ data["L3"]["DIP"] ])
-                            #p = makePacket(p2)
+                    self.send(data, route["outgoing_interface"])
+                    return True
 
-                            data["L2"]["From"] = self.id
-                            data["L2"]["To"] = oninterface.arp_cache[ route[2] ]
-                            self.send(data, route[3])
-                            return True
-                        else: # Send ARP
-                            #targetID = await self.sendARP(route[2], "aaaaa")
-                            targetID = -1
-                            raise
-                            if targetID:
-                                #p2 = makePacket_L2("IPv4", self.id, targetID)
-                                #p = makePacket(p2)
-                                data["L2"]["From"] = self.id
-                                data["L2"]["To"] = oninterface.arp_cache[ route[2] ]
-                                self.send(data, route[3])
-                                return True
-                            else:
-                                Debug(self.id, "ARP failed, dropping packet",
-                                    color="red", f=self.__class__.__name__    
-                                )
-                            return False
-                    """
-                    else:
-                        Debug(self.id, "No matching route type, dropping packet",
-                            color="red", f=self.__class__.__name__    
-                        )
             else:
                 Debug(self.id, "Failed to find a match for packet, dropping",
                     color="yellow", f=self.__class__.__name__    
