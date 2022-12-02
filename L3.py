@@ -392,7 +392,7 @@ class Router(L3Device):
     
     def addRoute(self, route):
         # For now we only do S(tatic) routes
-        # ("S", "192.168.1.2/24", "192.162.1.1/24", outgoing_interface)
+        # ("S", "192.168.1.0/24", "192.162.1.1/24", outgoing_interface)
         # Type  Destination       NextHop           OI
         assert route[0] == "S"
         assert isinstance(route[1], str)
@@ -401,8 +401,8 @@ class Router(L3Device):
 
         d = {
             "type":route[0],
-            "dst":ip.ipaddress.IPv4Network(route[1], strict=False),
-            "nexthop":ip.ipaddress.IPv4Network(route[2], strict=False),
+            "dst":ipaddress.ip_network(route[1], strict=False),
+            "nexthop":ipaddress.ip_address(route[2].split("/")[0]),
             "outgoing_interface":route[3]
         }   
         
@@ -421,6 +421,10 @@ class Router(L3Device):
 
         :param data: See `Headers.makePacket()`, dict
         """
+        if self.DEBUG == 2:
+            Debug(self.id, "got data", data,
+                color="blue", f=self.__class__.__name__
+            )
         
         if not oninterface:
             oninterface = self.interfaces[0]
@@ -433,7 +437,9 @@ class Router(L3Device):
             self.handleARP(data, oninterface)
         
         # ===================================================
+            
         
+
         elif data["L2"]["EtherType"] == "IPv4": # L3 multiplexing
             """
             - Sort the table by prefixlength
@@ -464,7 +470,7 @@ class Router(L3Device):
                     if route["type"] == "C": 
                         nextHopIP = data["L3"]["DIP"]
                     elif route["type"] == "S":
-                        nextHopIP = route["nexthop"]
+                        nextHopIP = route["nexthop"].exploded
                     elif route["type"] == "L":
                         # Addressed to me directly
                         #super().handleData()
@@ -475,7 +481,7 @@ class Router(L3Device):
                         nextHopID = route["outgoing_interface"].ARPHandler.arp_cache[nextHopIP]
                     else: # ARP it
                         nextHopID = [None]
-                        x = threading.Thread(target=self.sendARP, args=(data["L3"]["DIP"], route["outgoing_interface"]), kwargs={"result":nextHopID})
+                        x = threading.Thread(target=self.sendARP, args=(nextHopIP, route["outgoing_interface"]), kwargs={"result":nextHopID})
                         x.start()
                         x.join() # Block and wait for the thread to finish
                         nextHopID = nextHopID[0]

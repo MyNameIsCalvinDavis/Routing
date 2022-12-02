@@ -45,8 +45,8 @@ class L2Device(Device):
                     your_interface.ICMPHandler = ICMPHandler(device.id, link.id, "0.0.0.0", None, debug=1)
                     your_interface.ARPHandler = ARPHandler(device.id, link.id, "0.0.0.0", debug=1)
                     device._associateIPsToInterfaces() # Possibly in need of a lock
-                else:
-                    print(self.id, type(device))
+                #else:
+                    #print(self.id, type(device))
 
 """
 TODO: A static IP host doesn't know where the gateway is

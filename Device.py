@@ -150,6 +150,7 @@ class Device(ABC):
         assert isinstance(oninterface, Interface)
 
         if not isinstance(targetIP, str):
+            #print(targetIP, type(targetIP))
             raise ValueError("TargetIP must be string, given: " + str(targetIP) )
         
         # Internally:

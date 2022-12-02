@@ -63,11 +63,12 @@ def topology1():
     A = Host(["1.1.1.2/24"])
 
     B = Host(["2.2.2.2/24"])
-    #B.interfaces[0].gateway = "2.2.2.10/24" # Bs default gateway is R2!
     S1 = Switch([B], debug=0)
 
     R1 = Router(["1.1.1.1/24", "2.2.2.1/24"], [A, S1])
     A.interfaces[0].gateway = "1.1.1.1/24"
+
+    #B.interfaces[0].gateway = "2.2.2.10/24" # Bs default gateway is R2!
     B.interfaces[0].gateway = "2.2.2.1/24" # Bs default gateway is R1!
 
     C = Host(["3.3.3.2/24"])
@@ -81,11 +82,33 @@ def topology1():
     return A, B, C, D, R1, R2, S1, S2, S3
 
 def ICMPTest_DifferentSubnet2():
+    """
+    Given topology1():
+    A -> B
+    """
     A, B, C, D, R1, R2, S1, S2, S3 = topology1()
     print(S1)
     print(R1)
     A.sendICMP(B.getIP())
 
+def ICMPTest_DifferentSubnet3():
+    """
+    Given topology1():
+    A -> C
+    """
+    A, B, C, D, R1, R2, S1, S2, S3 = topology1()
+
+    # Add 1.1.1.0/24 route to R2
+    route = ("S", "1.1.1.0/24", "2.2.2.1/24", R2.interfaces[0])
+    R2.addRoute(route)
+    
+    # Add 3.3.3.0/24 route to R1
+    route = ("S", "3.3.3.0/24", "2.2.2.10/24", R1.interfaces[1])
+    R1.addRoute(route)
+    R2.DEBUG = 1
+    S1.DEBUG = 0
+
+    A.sendICMP(C.getIP())
     
 
 def ARP_Router_to_Host():
@@ -104,7 +127,9 @@ def main():
     #ARPTest()
     #ICMPTest_SameSubnet()
     #ICMPTest_DifferentSubnet1()
-    ICMPTest_DifferentSubnet2()
+    #ICMPTest_DifferentSubnet2()
+    ICMPTest_DifferentSubnet3()
+
     #SendArpToRouter()
 
 
