@@ -19,8 +19,9 @@ We can initialize it as such:
 ```python
 A = Host(["1.1.1.2/24"])
 B = Host(["1.1.1.3/24"])
-S1 = Switch([A, B])
-await A.sendARP(B.getIP())
+C = Host(["1.1.1.4/24"])
+S1 = Switch([A, B, C])
+A.sendARP(B.getIP())
 ```
 <img src="Images/ARP.png">
 
@@ -31,12 +32,33 @@ A = Host()
 D1 = DHCPServer("1.1.1.2/24", gateway="1.1.1.1/24", debug=1)
 S1 = Switch([A, D1], debug=0)
 
-await A.sendDHCP("init", timeout=5)
-time.sleep(1)
+A.sendDHCP("init", timeout=5)
 pprint("As IP: ", A.getIP())
 ```
 
 <img src="Images/DHCP.png">
+
+We can construct an arbitrary toplogy without much fuss:
+
+> <img src="Images/ArbitraryTopology.png">
+
+```python
+A = Host(["1.1.1.2/24"])
+B = Host(["2.2.2.2/24"])
+C = Host(["3.3.3.2/24"])
+D = Host(["4.4.4.2/24"])
+
+A.interfaces[0].gateway = "1.1.1.1/24"
+B.interfaces[0].gateway = "2.2.2.1/24" # Bs default gateway is R1!
+
+S1 = Switch([B], debug=0)
+R1 = Router(["1.1.1.1/24", "2.2.2.1/24"], [A, S1])
+
+S3 = Switch([D], debug=0)
+S2 = Switch([S3], debug=0)
+R2 = Router(["2.2.2.10/24", "3.3.3.1/24", "4.4.4.1/24"], [S1, C, S2])
+```
+
 
 Devices communicate to each other with a frame, although this project uses a dict representation instead of packed byte data. Each layer must be built separately, though we wrap this functionality with functions like sendARP() or sendDHCP() for example, as seen above. Under the hood, a frame might look like:
 ```python
