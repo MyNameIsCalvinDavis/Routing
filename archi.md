@@ -151,6 +151,7 @@ DHCP_Client
         create
             D / O / R / A
 ```
+ARP is fairly straightforward as it just updates its cache
 ```
 ARP
     Params
