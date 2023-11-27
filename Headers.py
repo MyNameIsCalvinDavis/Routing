@@ -41,11 +41,11 @@ def genericIgnoreMessage(inproto, ID, fr=None):
     if fr: s = "from " + fr
     print("("+inproto+")", ID, "ignoring data", s)
 
-def findInterfaceFromLinkID(ID, interfaces):
+def findInterfaceFromID(ID, interfaces):
     if not ID or not interfaces:
         raise ValueError("ID or interfaces is None")
     for interface in interfaces:
-        if interface.linkid == ID:
+        if interface.id == ID:
             return interface
     else:
         raise ValueError("Could not find interface from linkID:" + ID)
@@ -74,24 +74,24 @@ def makePacket(L2="", L3="", L4="", L5="", L6="", L7=""):
     return d
 
 # An ethernet frame
-def makePacket_L2(ethertype="", fr="", to="", fromlink="", data=""):
+def makePacket_L2(ethertype="", fr="", to="", data=""):
     return {
         "EtherType":ethertype, # Defines which protocol is encapsulated in data
         "From":fr,
         "To":to,
-        "FromLink":fromlink,
+        "FromLink":None, # This is automatically filled by Device.send()
         "Data":data, # ARP packet, IP packet, DHCP packet, etc
     }
 
 # an IP packet
-def makePacket_L3(sip, dip, data="", proto=None, TTL=10 ):
+def ip_header(sip, dip, data="", proto=None, TTL=10 ):
     if data: assert isinstance(data, dict)
     if proto: assert isinstance(proto, str)
     return {
-        "Version":4, # Make a new parameter if you love 6 so much, nerd
+        "Version":4, # Make a new parameter if you love 6 so much
         "HLEN":0, # unimplemented until we care about fragmentation
         "TOS":0, # unused
-        "TotalLength":0,
+        "TotalLength":0, # no checksums here
         "ID":random.randint(0, 2**16), # fragmentation
         "Flags":0, # fragmentation
         "FOffset":0,
@@ -101,8 +101,8 @@ def makePacket_L3(sip, dip, data="", proto=None, TTL=10 ):
         # For "Protocol" we'll probably just use names to not confuse ourselves
         "Protocol":proto,
         "Checksum":0,
-        "SIP":sip, # Src, Dst
-        "DIP":dip,
+        "sip":sip, # Src, Dst
+        "dip":dip,
         "Data":data
     }
 
@@ -151,7 +151,7 @@ ARP REQUEST PACKET FORMAT                       ARP RESPONSE FORMAT (same thing)
 |         T_NID (bytes 4-7)         |           |         T_NID (bytes 4-7)         |
 +--------+--------+--------+--------+           +--------+--------+--------+--------+
 """
-def createARPHeader(op, fr, frIP, to, toIP):
+def arp_header(op, fr, frIP, to, toIP):
     d = {
         "HT":"Ethernet",
         "PT":"IPv4", # We won't be using anything other than IPv4 for the time being

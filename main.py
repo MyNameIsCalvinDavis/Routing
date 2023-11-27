@@ -65,7 +65,7 @@ def topology1():
     B = Host(["2.2.2.2/24"])
     S1 = Switch([B], debug=0)
 
-    R1 = Router(["1.1.1.1/24", "2.2.2.1/24"], [A, S1])
+    R1 = Router(["1.1.1.1/24", "2.2.2.1/24"], [A, S1], debug=2)
     A.interfaces[0].gateway = "1.1.1.1/24"
 
     #B.interfaces[0].gateway = "2.2.2.10/24" # Bs default gateway is R2!

@@ -481,6 +481,13 @@ class Router(L3Device):
                         nextHopID = route["outgoing_interface"].ARPHandler.arp_cache[nextHopIP]
                     else: # ARP it
                         nextHopID = [None]
+
+                        # It may not be intuitive to start a thread then immediately block waiting for it,
+                        # but the sendARP function internally has a timeout (default 5s) which will succeed
+                        # or fail, and we are waiting on that response
+
+                        # TODO: self.sendARP is blocking, we don't need a thread for it
+                        # TODO: Rename Handler sendARP to createARP, etc
                         x = threading.Thread(target=self.sendARP, args=(nextHopIP, route["outgoing_interface"]), kwargs={"result":nextHopID})
                         x.start()
                         x.join() # Block and wait for the thread to finish

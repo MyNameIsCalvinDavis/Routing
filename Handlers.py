@@ -1,32 +1,17 @@
 from Headers import *
 from Debug import *
 
-
-class ARPHandler:
-    def __init__(self, ID, linkid, ip=None, debug=1):
+class ARP:
+    def __init__(self, _parent, debug=1):
         self.DEBUG = debug
-        self.id = ID
-        self.linkid = linkid
-        self.ip = ip
-
-        # A function passed in from whoever uses this handler
-        # to get an IP of that interface / device
-        #if ipfunc:
-        #    self.getIP = ipfunc
-        #else:
-        #    self.getIP = None
-
-        # x.x.x.x = -H-123123123
+        self._parentInterface = _parent
+        self.id = _parent.id
+        self.ip = _parent.ip
         self.arp_cache = {} # IP to MAC/ID 
 
-    def sendARP(self, targetIP):
+    async def create(self, targetIP):
         """ 
-        ARP Wrapper for self.send()
-
-        :param targetID: The IP of the target device
-        :param onlinkID: Link to be sent on, default None targets first link on self.links
-        :returns: The response packet, dict
-        :returns: The linkID it should be sent out on, str
+        Create an ARP Request
         """
         
         # Set the IP to a missing value, to be checked later
@@ -37,27 +22,18 @@ class ARPHandler:
             Debug(self.id, "sending ARP request to", targetIP,
                 color="green", f=self.__class__.__name__
             )
-        # TODO: Add isinstance for class Interface
-        #elif not isinstance(oninterface, str):
-        #    raise ValueError("oninterfaceID must be of type <str>")
 
         # Make the frame
-        ARP = createARPHeader(1, self.id, self.ip, 0, targetIP)
+        ARP = arp_header(1, self.id, self.ip, 0, targetIP)
         p2 = makePacket_L2("ARP", self.id, MAC_BROADCAST, data=ARP)
         p = makePacket(p2)
-        return p#, oninterface
+        return p
 
-    def handleARP(self, data):
+    async def handle(self, data):
         """ 
         Process an ARP request and generate a response
-        
-        :param data: See `Headers.makePacket()`, dict
-        :returns: The response packet, dict
-        :returns: The linkID it should be sent out on, str
         """
-        # If an ip function hasnt been provided to the class, then this device has no IP,
-        # so it can ignore the ARP request
-        if not self.ip:
+        if self.ip == "0.0.0.0/32":
             if self.DEBUG:
                 Debug(self.id, "has no IP - ignoring ARP",
                     color="yellow", f=self.__class__.__name__
@@ -68,19 +44,16 @@ class ARPHandler:
         if data["L2"]["To"] == MAC_BROADCAST and data["L2"]["Data"]["OP"] == 1:
             
             # Do I have the IP requested?
-            if self.ip == data["L2"]["Data"]["TPA"]:
+            if self._parentInterface.ip == data["L2"]["Data"]["TPA"]:
                 if self.DEBUG:
                     Debug(self.id, "got Request from", data["L2"]["From"], "- sending Response",
                         color="green", f=self.__class__.__name__
                     )
-                ARP = createARPHeader(2, fr=self.id, frIP=self.ip, to=data["L2"]["Data"]["SHA"], toIP=data["L2"]["Data"]["SPA"])
-                p2 = makePacket_L2("ARP", self.id, data["L2"]["From"], data=ARP) # Resp has no data
+                ARP = arp_header(2, fr=self.id, frIP=self.ip, 
+                    to=data["L2"]["Data"]["SHA"], toIP=data["L2"]["Data"]["SPA"])
+                p2 = makePacket_L2("ARP", self.id, data["L2"]["From"], data=ARP)
                 p = makePacket(p2)
-                return p#, interface
-            #else:
-            #    print(self.id, "I dont have the IP requested")
-            #    print(self.id, self.ip, data)
-            
+                return p
         
         # Receiving an ARP Response
         elif data["L2"]["To"] == self.id and data["L2"]["Data"]["OP"] == 2:

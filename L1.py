@@ -1,29 +1,45 @@
 import random
+import asyncio
+import Handlers
 
 
 class Link:
     """ Connects two devices """
-    def __init__(self, dl=[]):
+    def __init__(self, connected=[]):
         self.id = "[L]" + str(random.randint(10000, 99999999))
-        self.dl = dl
+        self.connected = connected
+    
+    def get_other(self, x):
+        if len(self.connected) < 2: raise LookupError("This link only has one interface")
+        return self.connected[1] if self.connected[0] == x else self.connected[0]
+    
+    def add(self, x):
+        self.connected.append(x)
+
+    def __contains__(self, d):
+        return d in self.connected
 
 class Interface:
-    def __init__(self, link, ip, parentID):
-        self.id = "_I_" + str(random.randint(10000, 99999999))
-        self.link = link
-        self.linkid = link.id
-        self.ip = ip
+    def __init__(self, _parent, id, ip=None):
+        self.id = "{} ({}{})".format(_parent.id, "I", id)
+        self.link = Link([self])
+        self._parentDevice = _parent
 
-        self.DHCPClient = None
-        self.ARPHandler = None
-        self.ICMPHandler = None
+        self.config = {
+            "ip": ip if ip else "0.0.0.0",
+            "gateway": None,
+            "netmask": None
+        }
 
-        # Will also have gateway / nmask, and anything else important per interface
-        self.gateway = ""
-        self.nmask = ""
-        # Note: This information may or may not conflict with whatever is in self.DHCPClient.
-        # If this interface was configured with DHCP, they will be the same
-        # If not, then the DHCPClient contains defualt into and should not be referred to
+        self.handlers = {
+            #"DHCP": Handlers.DHCP_Client(self, debug=self.DEBUG),
+            "ARP": Handlers.ARP(self, 1),
+            #"ICMP": Handlers.ICMP(self, "0.0.0.0", debug=self.DEBUG)
+        }
+
+    @property
+    def ip(self):
+        return self.config["ip"]
 
     def __str__(self):
         return "(" + self.id + ":" + self.ip + ")"
