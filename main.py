@@ -5,7 +5,68 @@ import time
 
 def pprint(*args, end="\n"):
     Debug("", *args, color="white", f="main")
-    
+
+async def topology2():
+    """
+                                          3.3.3.0
+                 A               B           C 
+        1.1.1.0  |               |           | 
+                 R1 ------------ S1 -------- R2          D
+                        <--- 2.2.2.0 --->    |           |
+                                             |  4.4.4.0  |
+                                             S2 -------- S3
+    A: 1.1.1.2
+    R1: 1.1.1.1, 2.2.2.1
+    B: 2.2.2.2
+    R2: 2.2.2.10, 3.3.3.1, 4.4.4.1
+    C: 3.3.3.2
+    D: 4.4.4.2
+    """
+    A = Host(["1.1.1.2/24"])
+
+    B = Host(["2.2.2.2/24"])
+    S1 = Switch([B], debug=0)
+
+    R1 = Router(["1.1.1.1/24", "2.2.2.1/24"], [A, S1], debug=2)
+    A.interfaces[0].gateway = "1.1.1.1/24"
+
+    #B.interfaces[0].gateway = "2.2.2.10/24" # Bs default gateway is R2!
+    B.interfaces[0].gateway = "2.2.2.1/24" # Bs default gateway is R1!
+
+    C = Host(["3.3.3.2/24"])
+
+    # 4.4.4.0/24
+    D = Host(["4.4.4.2/24"])
+    S3 = Switch([D], debug=0)
+    S2 = Switch([S3], debug=0)
+
+    R2 = Router(["2.2.2.10/24", "3.3.3.1/24", "4.4.4.1/24"], [S1, C, S2])
+    return A, B, C, D, R1, R2, S1, S2, S3
+
+async def topology1():
+    """
+    A ----- B
+            |
+    C ----- D
+    A: 1.1.1.2
+    B: 1.1.1.3
+    C: 1.1.1.4
+    D: 1.1.1.5
+    """
+    A = Device(["1.1.1.2/24"])
+    B = Device(["1.1.1.3/24"], [A])
+    C = Device(["1.1.1.4/24"])
+    D = Device(["1.1.1.5/24", "1.1.1.6/24"], [C, B])
+    return A, B, C, D
+
+async def DeviceTest():
+    # Test to see if Device initialization and basic connection works
+    devices = await topology1()
+    for device in devices:
+        print([x.ip for x in device.interfaces])
+        print(device)
+        
+
 def DHCPTest():
 
     A = Host()
@@ -44,42 +105,6 @@ def ICMPTest_DifferentSubnet1():
     B.interfaces[0].gateway="2.2.2.1/24"
     A.sendICMP(B.getIP())
 
-def topology1():
-    """
-                                          3.3.3.0
-                 A               B           C 
-        1.1.1.0  |               |           | 
-                 R1 ------------ S1 -------- R2          D
-                        <--- 2.2.2.0 --->    |           |
-                                             |  4.4.4.0  |
-                                             S2 -------- S3
-    A: 1.1.1.2
-    R1: 1.1.1.1, 2.2.2.1
-    B: 2.2.2.2
-    R2: 2.2.2.10, 3.3.3.1, 4.4.4.1
-    C: 3.3.3.2
-    D: 4.4.4.2
-    """
-    A = Host(["1.1.1.2/24"])
-
-    B = Host(["2.2.2.2/24"])
-    S1 = Switch([B], debug=0)
-
-    R1 = Router(["1.1.1.1/24", "2.2.2.1/24"], [A, S1], debug=2)
-    A.interfaces[0].gateway = "1.1.1.1/24"
-
-    #B.interfaces[0].gateway = "2.2.2.10/24" # Bs default gateway is R2!
-    B.interfaces[0].gateway = "2.2.2.1/24" # Bs default gateway is R1!
-
-    C = Host(["3.3.3.2/24"])
-
-    # 4.4.4.0/24
-    D = Host(["4.4.4.2/24"])
-    S3 = Switch([D], debug=0)
-    S2 = Switch([S3], debug=0)
-
-    R2 = Router(["2.2.2.10/24", "3.3.3.1/24", "4.4.4.1/24"], [S1, C, S2])
-    return A, B, C, D, R1, R2, S1, S2, S3
 
 def ICMPTest_DifferentSubnet2():
     """
@@ -122,18 +147,18 @@ def SendArpToRouter():
     A.sendARP(R1.getIP())
     R1.sendARP(A.getIP())
 
-def main():
+async def main():
+    await DeviceTest()
     #DHCPTest()
-    #ARPTest()
+    #await ARPTest()
     #ICMPTest_SameSubnet()
     #ICMPTest_DifferentSubnet1()
     #ICMPTest_DifferentSubnet2()
-    ICMPTest_DifferentSubnet3()
-
+    #ICMPTest_DifferentSubnet3()
     #SendArpToRouter()
 
 
 
 if __name__ == "__main__":
-    #asyncio.run( main() )
-    main()
+    asyncio.run( main() )
+    #main()

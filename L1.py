@@ -26,7 +26,7 @@ class Interface:
         self._parentDevice = _parent
 
         self.config = {
-            "ip": ip if ip else "0.0.0.0",
+            "ip": ip if ip else "0.0.0.0/32",
             "gateway": None,
             "netmask": None
         }

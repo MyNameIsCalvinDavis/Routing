@@ -40,10 +40,11 @@ class Device():
         # To be used as a recipient for send(), read by listen()
         self.read_buffer = []
         self.ip_forward = 0
+        self._ips = ips # Only used for init, should check interfaces directly for current ip
 
-        self._initConnections(connectedTo, ips)
+        self._initConnections(connectedTo)
 
-    def _initConnections(self, connectedTo, ips):
+    def _initConnections(self, connectedTo):
         for idx, device in enumerate(connectedTo):
             # Are we already connected?
             local = 0
@@ -72,14 +73,21 @@ class Device():
                 local_i.link.add(remote_i)
                 remote_i.link = local_i.link
 
-        # Associate provided IPs to each interface
-        # If there are more interfaces than IPs, they get 0.0.0.0/32
-        if ips: # Dont do this for L2 devices
-            for i in range(len(self.interfaces)):
-                try:
-                    self.interfaces[i].config["ip"] = ips[i]
-                except IndexError:
-                    self.interfaces[i].config["ip"] = "0.0.0.0/32"
+                # With interfaces set up between us, assign IPs
+                if self._ips: # Dont do this for L2 devices
+                    try:
+                        local_i.config["ip"] = self._ips[idx]
+                    except IndexError:
+                        pass # There are more interfaces than IPs, keep the default
+
+                if device._ips:
+                    for i, dev_int in enumerate(device.interfaces):
+                        if dev_int.ip == "0.0.0.0/32":
+                            try:
+                                dev_int.config["ip"] = device._ips[i]
+                            except IndexError:
+                                pass # There are more interfaces than IPs, keep the default
+                            break
 
     async def listen(self):
         while True:

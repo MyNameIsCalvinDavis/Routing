@@ -48,7 +48,7 @@ def findInterfaceFromID(ID, interfaces):
         if interface.id == ID:
             return interface
     else:
-        raise ValueError("Could not find interface from linkID:" + ID)
+        raise ValueError("Could not find interface from IntID:" + ID)
 
 
 def makePacket(L2="", L3="", L4="", L5="", L6="", L7=""):
